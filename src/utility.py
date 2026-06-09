@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import pysam, argparse, os, sys
-import ray
 from collections import Counter, defaultdict
 import subprocess
 import pickle

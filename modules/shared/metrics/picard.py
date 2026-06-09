@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Calculate legacy alignment metrics from a BAM using samtools view.
 
-This is a Python port of modules/shared/metrics/picard.pl.  It preserves the
+This is a Python port of the legacy Picard metrics script.  It preserves the
 same positional CLI and output labels so existing summary parsing keeps working.
 """
 

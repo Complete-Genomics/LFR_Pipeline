@@ -116,21 +116,6 @@ rule remove_duplicates:
             shell("cd Align && ln -s ../keep/Align/data.sort.markdup.bam data.sort.removedup_rm000.bam && cd .. && samtools index {output.bam}")
         elif 'standard' in config['params']['bc_condition']:
             shell("samtools view -b -h -F 0x400 {input}  > {output.bam} && samtools index {output.bam}")
-
-
-# This step parses the duplicate metrics and creates a more readable summary
-rule mark_dups_txt:
-    input:
-        "Align/{id}_dedup_metrics.txt"
-    output:
-        "Align/{id}_dedup_metrics2.txt"
-    params:
-        toolsdir = config['params']['toolsdir']
-    benchmark:
-        "Benchmarks/main.mark_dups_txt.{id}.txt"
-    shell:
-        "perl {params.toolsdir}/tools/mark_dups_txt.pl {input} {output}"
-
 # idxstats: Primary Alignment
 rule mapped_uniq_bc_bases_count:
     input:

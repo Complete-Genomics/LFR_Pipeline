@@ -1,4 +1,4 @@
-## TODO: as it's full length of reads, need to refactor picard.pl to measure mapping rate
+## TODO: as it's full length of reads, need to refactor picard.py to measure mapping rate
 
 rule split_reads_BCgDNA:
     input:
@@ -23,12 +23,18 @@ rule split_reads_BCgDNA:
         gdna_start_r1 = config['params']['gdna_start_r1'], 
         additional_bc_len_r1 = config['params']['additional_bc_len_r1'],
         adapter_len = config['params']['adapter_len'],
+    threads:
+        config['threads']['split_group']
     run:
         if config['params']['bc_condition'] == 'BCgDNA':
             params.barcode = determine_barcode_list(400000)
-            shell("perl {params.src_dir}/modules/shared/splitreads/split_barcode_PEXXX_42_reads_BCgDNA_fullreads.pl "
-                    "{params.toolsdir}{params.barcode} "
-                    "{input} {params.r2_len} data/split_read {params.bc_start} {params.gdna_start} {params.additional_bc_start} {params.additional_bc_len} {params.gdna_start_r1} {params.r1_len} {params.adapter_len} "
+            shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                    "--barcode {params.barcode} "
+                    "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
+                    "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
+                    "--additional_bc_start {params.additional_bc_start} --additional_bc_len {params.additional_bc_len} "
+                    "--gdna_start_r1 {params.gdna_start_r1} --read_len_r1 {params.r1_len} "
+                    "--adapter_len {params.adapter_len} --swap none --output_mode stratified --threads {threads} "
                     "2> data/split_stat_read.err")
 
 rule map_gDNA:

@@ -3,6 +3,7 @@ usage:
 python $src --bam $bam --ref_fasta $ref --output_fasta output.fa --start_index 2000 --end_index 4000
 '''
 
+import random
 import subprocess
 import os
 import tempfile
@@ -21,8 +22,8 @@ parser.add_argument("--chrom", type=str, required=False)
 parser.add_argument("--dict_file", type=str, required=False)
 parser.add_argument("--split_index", type=int, required=False)
 parser.add_argument("--min_reads", type=int, required=False)
-parser.add_argument("--samtools", type=str, required=False, default="samtools")
-parser.add_argument("--stringtie", type=str, required=False, default="stringtie")
+parser.add_argument("--downsample_ratio", type=float, default=1.0, required=False)
+parser.add_argument("--batch_id", type=str, default="", required=False)
 
 args = parser.parse_args()
 input_bam_file = args.bam
@@ -33,6 +34,34 @@ chrom = args.chrom
 split_index = args.split_index
 dict_file = args.dict_file
 MIN_READS = args.min_reads
+DOWNSAMPLE_RATIO = args.downsample_ratio
+BATCH_ID = args.batch_id
+
+# --- Configuration ---
+MIN_FRAG_LEN = 400
+MAX_FRAG_LEN = 20000
+REF='/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.ercc.fa'
+GTF='/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf'
+
+SAMTOOLS_PATH = "/home/ycai/anaconda3/envs/samtools122/bin/samtools"
+STRINGTIE_PATH = "/home/ycai/anaconda3/envs/my_py311_env/bin/stringtie"
+REF = "/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.ercc.fa"
+
+# MIN_READS = 50
+# 使用一个唯一的临时目录，确保不会与其他进程冲突
+TEMP_BASE_DIR = "/dev/shm"
+TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
+FALLBACK_TEMP_DIR = "/tmp"
+
+subprocess.call(f'mkdir -p /dev/shm/consensus', shell=True)
+TEMP_DIR = f"/dev/shm/consensus/{BATCH_ID}/{chrom}_{split_index}" if BATCH_ID else f"/dev/shm/consensus/{chrom}_{split_index}"
+subprocess.call(f'mkdir -p {TEMP_DIR}', shell=True)
+current_temp_dir = TEMP_DIR
+
+_fasta_ref_file = pysam.FastaFile(REF)
+
+# --- Global variable for FASTA reference ---
+_fasta_ref_file = None
 
 def get_idx(dict_file, split_index, chrom):
     chr_dict = {}
@@ -49,25 +78,6 @@ def get_idx(dict_file, split_index, chrom):
     return start_index, end_index
 
 start_index, end_index  = get_idx(dict_file, split_index, chrom)
-
-
-# --- Configuration ---
-SAMTOOLS_PATH = args.samtools
-STRINGTIE_PATH = args.stringtie
-MIN_FRAG_LEN = 400
-# 使用一个唯一的临时目录，确保不会与其他进程冲突
-TEMP_BASE_DIR = "/dev/shm"
-TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
-FALLBACK_TEMP_DIR = "/tmp"
-
-REF = reference_fasta_file
-subprocess.call(f'mkdir -p /dev/shm/consensus', shell=True)
-TEMP_DIR = f"/dev/shm/consensus/{chrom}_{split_index}"
-subprocess.call(f'mkdir -p {TEMP_DIR}', shell=True)
-current_temp_dir = TEMP_DIR
-
-# --- Global variable for FASTA reference ---
-_fasta_ref_file = None
 
 # def get_actual_temp_dir():
 #     """Determine the actual temporary directory to use, prefer /dev/shm/, fallback to /tmp."""
@@ -146,57 +156,120 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
         stringtie_path,
         temp_bam_path,
         "-o", temp_gtf_path, # Output to stdout
-        "-p", "1"  # Use 1 thread for stringtie
+        "-p", "1",  # Use 1 thread for stringtie
+        # f"--rf -f 0.1 -c 0.1 -g 50 -m 200 -G {GTF} -e",
+
     ]
     try:
         result = subprocess.run(stringtie_cmd, capture_output=True, text=True, check=True)
         # gtf_lines = result.stdout.strip().split("\n")
         with open(temp_gtf_path, 'r') as gtf_file:
             gtf_lines = gtf_file.read().strip().split("\n")
+
+        # Group exons by transcript and calculate transcript regions
+        from collections import defaultdict
+        transcript_exons = defaultdict(list)
         
-        # this concatenate all isoforms 
-        # exon_lines = [line for line in gtf_lines if "exon" in line]
-        # only use 1st isoforms, 
-        transcript_id = None
         for line in gtf_lines:
-            if "transcript" in line and "transcript_id" in line:
-                # Extract the first transcript ID
-                transcript_id = line.split('transcript_id "')[-1].split('"')[0]
-                break
-
-        # Filter for exons that belong to the first transcript
-        exon_lines = []
-        if transcript_id:
-            for line in gtf_lines:
-                if "exon" in line and f'transcript_id "{transcript_id}"' in line:
-                    exon_lines.append(line)
-        else:
-            # Fallback to original behavior if no transcript is found
-            exon_lines = [line for line in gtf_lines if "exon" in line]
-
-        bed_lines = []
-        for line in exon_lines:
-            # if "exon" in exon_lines: # Only interested in exons
-            fields = line.strip().split("\t")
-            if len(fields) < 8:
-                sys.stderr.write(f"WARNING: GTF line format invalid: {line}\n")
+            if "exon" not in line:
                 continue
+            fields = line.strip().split("\t")
+            if len(fields) < 9:
+                continue
+            
             try:
                 chrom = fields[0]
-                # GTF is 1-based start, 1-based end. BED is 0-based start, 1-based end.
-                start = int(fields[3]) # Convert to 0-based
-                end = int(fields[4])       # Already 1-based end
-                length = end - start
-                bed_lines.append(f"{chrom}\t{start}\t{end}\t{length}")
+                start = int(fields[3])
+                end = int(fields[4])
+                attributes = fields[8]
+                
+                # Extract transcript_id
+                if 'transcript_id "' in attributes:
+                    transcript_id = attributes.split('transcript_id "')[1].split('"')[0]
+                    transcript_exons[transcript_id].append((chrom, start, end))
             except (ValueError, IndexError) as e:
                 sys.stderr.write(f"Error parsing GTF line: {line}, Error: {e}\n")
                 continue
+        
+        # Calculate transcript span and total length for each transcript
+        transcript_info = {}
+        for transcript_id, exons in transcript_exons.items():
+            if not exons:
+                continue
+            chrom = exons[0][0]
+            min_start = min(e[1] for e in exons)
+            max_end = max(e[2] for e in exons)
+            total_length = sum(e[2] - e[1] for e in exons)
+            transcript_info[transcript_id] = {
+                'chrom': chrom,
+                'start': min_start,
+                'end': max_end,
+                'length': total_length,
+                'exons': exons
+            }
+        
+        # Function to check if two transcripts overlap
+        def transcripts_overlap(t1, t2):
+            if t1['chrom'] != t2['chrom']:
+                return False
+            return not (t1['end'] < t2['start'] or t2['end'] < t1['start'])
+        
+        # Group overlapping transcripts and keep the longest in each group
+        # Optimized O(n log n) algorithm using sorting
+        if not transcript_info:
+            bed_lines = []
+        else:
+            # Sort transcripts by start position
+            sorted_transcripts = sorted(
+                transcript_info.items(),
+                key=lambda x: (x[1]['chrom'], x[1]['start'])
+            )
+            
+            selected_transcripts = []
+            i = 0
+            while i < len(sorted_transcripts):
+                tid1, info1 = sorted_transcripts[i]
+                # Start a new group with this transcript
+                group = [tid1]
+                current_end = info1['end']
+                current_chrom = info1['chrom']
+                
+                # Find all overlapping transcripts (linear scan since sorted by start)
+                j = i + 1
+                while j < len(sorted_transcripts):
+                    tid2, info2 = sorted_transcripts[j]
+                    if info2['chrom'] != current_chrom:
+                        break  # Different chromosome
+                    if info2['start'] <= current_end:
+                        # Overlaps - add to group and extend current end
+                        group.append(tid2)
+                        current_end = max(current_end, info2['end'])
+                        j += 1
+                    else:
+                        break  # No more overlaps possible for this group
+                
+                # Select longest transcript in the group
+                longest_tid = max(group, key=lambda t: transcript_info[t]['length'])
+                selected_transcripts.append(longest_tid)
+                
+                # Move to next unprocessed transcript
+                i = j
+            
+            # Collect all exons from selected transcripts
+            bed_lines = []
+            for transcript_id in selected_transcripts:
+                exons = transcript_info[transcript_id]['exons']
+                for chrom, start, end in exons:
+                    length = end - start
+                    bed_lines.append(f"{chrom}\t{start}\t{end}\t{length}")
     except subprocess.CalledProcessError as e:
         sys.stderr.write(f"Error running stringtie: {e.stderr}\n")
         bed_lines = []
     finally:
         if os.path.exists(temp_bam_path):
             os.unlink(temp_bam_path)
+        if os.path.exists(temp_gtf_path):
+            os.unlink(temp_gtf_path)
 
     return bed_lines
 
@@ -233,7 +306,16 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' read count {len(reads_list_obj)} < {MIN_READS}, skipping.\n")
         return None
 
+    # Downsample reads if ratio < 1.0
+    if DOWNSAMPLE_RATIO < 1.0 and len(reads_list_obj) > 1:
+        target_count = max(1, int(len(reads_list_obj) * DOWNSAMPLE_RATIO))
+        # Sample indices and sort to preserve original order
+        indices = sorted(random.sample(range(len(reads_list_obj)), target_count))
+        reads_list_obj = [reads_list_obj[i] for i in indices]
+
     bed_lines = generate_bed_data(reads_list_obj, header_dict_data, STRINGTIE_PATH, current_temp_dir)
+    # print(f'{umi_id}')
+    # print(bed_lines)
     if not bed_lines:
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no valid BED regions, skipping.\n")
         return None
@@ -293,12 +375,13 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                 if consensus_end <= consensus_start:
                     sys.stderr.write(f"WARNING: Clipped region for UMI {umi_id} is invalid: {samtools_chrom}:{consensus_start}-{consensus_end}. Skipping.\n")
                     continue
-                # -aa, Output absolutely all positions, including references with no data aligned against them
+
                 region = f"{samtools_chrom}:{consensus_start}-{consensus_end}"
                 cmd = [
                     SAMTOOLS_PATH,
                     "consensus",
                     "-aa",
+                    "-T", REF,
                     "-r", region,
                     "--show-ins", "yes",
                     temp_bam_path
@@ -334,7 +417,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         if temp_bam_path and os.path.exists(temp_bam_path + ".bai"): # Samtools index creates a .bai file
             os.unlink(temp_bam_path + ".bai")
 
-    if len(combined_seq) < MIN_FRAG_LEN:
+    if len(combined_seq) < MIN_FRAG_LEN or len(combined_seq) > MAX_FRAG_LEN:
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' combined sequence {len(combined_seq)}bp < {MIN_FRAG_LEN}bp, skipping.\n")
         return None
 
