@@ -57,7 +57,7 @@ rule get_consensus_fasta:
         min_reads = config['frag_de_novo']['reads_per_BC']
     run:
         command = ["{params.python}",
-                    "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_combined.py",
+                    "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta.py",
                     "--bam {input.bam}",
                     "--ref_fasta {params.ref}",
                     "--output_fasta {output}",
@@ -128,7 +128,7 @@ rule correc_direction_consensus:
     run:
         if config['params']['correct_rc']==True:
             command = ["{params.python} ",
-                    "{params.src_dir}/modules/clfr/consensus_fasta/denovo_supp.py ",
+                    "{params.src_dir}/modules/clfr/denovo/denovo_supp.py ",
                     "--adapter_seq {params.adapter_seq} ",
                     "--flank_end {params.flank_end} ",
                     "--fasta {input.consensus_fa}",

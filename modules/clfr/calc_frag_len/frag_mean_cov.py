@@ -83,7 +83,7 @@ def frag_mean_cov_10bins(bc_df, read_len, num_bin_in_frag, minreads, nk):
                 cov[i]-=edges[i+1]-pos[idx]
 
         mean_cov = np.array(cov)/bin_size
-        ## flip frag start/end if in - strand, 0 means - strand, see calc_frag_len.random_bc.py
+        ## flip frag start/end if in - strand, 0 means - strand, see calc_frag_len_optimized.py
         if strand ==1:
             mean_cov_bin.append(mean_cov)
             slope, intercept, r_value, p_value, std_err = st.linregress(slope_x, mean_cov)

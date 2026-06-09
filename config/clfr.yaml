@@ -38,10 +38,10 @@ modules:
     mate_pair_analysis: False
     read_overlap_analysis: False
     duplicate_plot: False
-    umi_analysis: False
-
 params:
     ########### start fill ###
+    downsample_ratio: 1.0
+    batch_id: ""
     correct_rc: True
     # map mrna library to genome: 'star' (gDNA uses BWA), 'minimap2'
     mrna_mapper: 'star'
@@ -97,7 +97,6 @@ params:
 
     bcftools: "/opt/cgi-tools/bin/bcftools"
     hapcut_link_dist: 100000
-    longhap: "/path/to/LongHap.pl"
     wenlan_python: "/opt/cgi-anaconda2-4.4.0/bin/python"
 
     # mRNA mapper tools (required when library_type: 'mrna')
@@ -149,12 +148,6 @@ calc_frag:
     writeouttsvs: True
     num_bin_in_frag: 10
     ylim: 50
-
-longhap:
-    win_size: 10000000
-    max_lfr_len: 300000
-    min_barcode: 1
-    min_link: 1
 
 frag_de_novo:
     run_parallel: False

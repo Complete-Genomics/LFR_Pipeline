@@ -1,1 +1,5 @@
 memory
+config/deploy
+*.pyc
+.DS_Store
+*/__pycache__

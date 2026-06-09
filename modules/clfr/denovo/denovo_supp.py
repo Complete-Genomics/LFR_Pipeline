@@ -98,29 +98,29 @@ def get_rc_seq(seq):
     rc_seq = complement_sequence[::-1]
     return rc_seq
 
-def correct_direction_mapping(mapped_fasta, denovo_fasta, output, infile_paf):
+def correct_direction_mapping(denovo_fasta, output, infile_paf):
     '''
     get frag direction from mapped.fasta (using r1 direction) to correct denovo.fasta direction (megahit output RC when palindrome found in assembly)
     '''
     ### get direction from map.frag.fasta
-    neg, pos=0, 0
-    mapped_bc_strand_dict = {}
-    with open(mapped_fasta, "r") as handle:
-        for record in SeqIO.parse(handle, "fasta"):
-            strand = '-'
-            description = record.description
-            _id = record.id
+    # neg, pos=0, 0
+    # mapped_bc_strand_dict = {}
+    # with open(mapped_fasta, "r") as handle:
+    #     for record in SeqIO.parse(handle, "fasta"):
+    #         strand = '-'
+    #         description = record.description
+    #         _id = record.id
 
-            if '(+)' in description:
-                strand = '+'
-                pos+=1
-            else:
-                neg+=1
-            # bc_len=15
-            bc= _id[:CBC_LEN]
-            mapped_bc_strand_dict[bc]=strand
-    print(f'neg{neg}, pos{pos}')
-    print(f'mapped_bc_strand_dict_len {len(mapped_bc_strand_dict)}')
+    #         if '(+)' in description:
+    #             strand = '+'
+    #             pos+=1
+    #         else:
+    #             neg+=1
+    #         # bc_len=15
+    #         bc= _id[:CBC_LEN]
+    #         mapped_bc_strand_dict[bc]=strand
+    # print(f'neg{neg}, pos{pos}')
+    # print(f'mapped_bc_strand_dict_len {len(mapped_bc_strand_dict)}')
 
     ## {bc: denovo_seq}
     bc_fasta_dict = {}
@@ -128,6 +128,7 @@ def correct_direction_mapping(mapped_fasta, denovo_fasta, output, infile_paf):
     with open(denovo_fasta, "r") as handle:
         for record in SeqIO.parse(handle, "fasta"):
             _id = record.id
+            ## +6 to keep >k41_4 tag
             bc_len =CBC_LEN+6
             bc = _id[:(bc_len)]
             bc_fasta_dict[bc]=(_id, str(record.seq))
@@ -197,11 +198,24 @@ def correct_direction_mapping(mapped_fasta, denovo_fasta, output, infile_paf):
     #                 f.write(seq+'\n')
 
     cnt_rc, frag_not_in_mapped =0, 0
-    with open(output,'w') as f, open('./denovo/frag_not_in_mapped.fa', 'w') as f2:
+    with open(output,'w') as f, open(f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa', 'w') as f2:
         for bc in bc_fasta_dict:   
             try:
-                # same direction
-                if mapped_bc_strand_dict[bc[:CBC_LEN]]==denovo_bc_strand_dict[bc]:
+                # same direction, denovo - is - seq, consensus - reverse
+                # if NAME=='denovo':
+                #     if mapped_bc_strand_dict[bc[:CBC_LEN]]==denovo_bc_strand_dict[bc]:
+                #         _id,seq = bc_fasta_dict[bc]
+                #         f.write('>'+_id+'\n')
+                #         f.write(seq+'\n')
+                #         # pass
+                #     else:
+                #         cnt_rc+=1
+                #         _id,seq = bc_fasta_dict[bc]
+                #         new_seq = get_rc_seq(seq)
+                #         f.write('>'+_id+'\n')
+                #         f.write(new_seq+'\n')
+                # elif NAME=='consensus':
+                if denovo_bc_strand_dict[bc]=='+':
                     _id,seq = bc_fasta_dict[bc]
                     f.write('>'+_id+'\n')
                     f.write(seq+'\n')
@@ -212,6 +226,7 @@ def correct_direction_mapping(mapped_fasta, denovo_fasta, output, infile_paf):
                     new_seq = get_rc_seq(seq)
                     f.write('>'+_id+'\n')
                     f.write(new_seq+'\n')
+
             except Exception as e: 
                 frag_not_in_mapped+=1
                 _id,seq = bc_fasta_dict[bc]
@@ -402,7 +417,7 @@ def metrics_basic(fasta, outdir):
                 bc_frag_dict[bc].append((str(record.id), seq))
             else:
                 bc_frag_dict[bc].append((str(record.id), seq))
-                print(len(bc_frag_dict))
+                # print(len(bc_frag_dict))
                 # print(f'bc ==current_id{bc_frag_dict}')
 
         # Handle the last barcode
@@ -688,7 +703,7 @@ def filter_2bc_count(batches, cutoff, write2dict):
 if __name__ == "__main__":
     module = args.module
     fasta = args.fasta
-    outdir = args.outdir
+    OUTDIR = args.outdir
     minreads_fasta = args.minreads_fasta
     batch_list = args.batch_list
     DIR = args.dir
@@ -697,7 +712,7 @@ if __name__ == "__main__":
 
     if module == 'metrics_basic':
         if fasta:
-            metrics_basic(fasta, outdir)
+            metrics_basic(fasta, OUTDIR)
         else:
             print('needs fasta')
     elif module =='fragLen_readsCount_corr':
@@ -754,36 +769,25 @@ if __name__ == "__main__":
         FLANK_END = args.flank_end
         # denovo_paf = 'denovo.100.paf'
         # dir='/prod/hustor-04/zebra/ycai/results/V350136898/L01/analysis'
-        _dir = f'./'
-        infile_paf=_dir+'denovo/denovo.paf'
-        denovo_fasta= _dir+'denovo/final_contigs_0.fa'
-        out_tmp = _dir+'denovo/denovo.fixRCmapping.fasta'
-        output0 = _dir+'denovo/denovo.fixAdapter.fasta'
-        mapped_fasta = _dir+'/Align/all_N100.fasta'
-    
+        # _dir = f'./'
+        fa_name = fasta.split('/')[-1]
+        if fa_name == 'final_contigs_0.fa':
+            NAME = 'denovo'
+        elif fa_name == 'consensus.fasta':
+            NAME = 'consensus'
+        _dir = OUTDIR # Align
+        infile_paf=f'{OUTDIR}/{NAME}/{NAME}.paf'
+        denovo_fasta= f'{OUTDIR}/{NAME}/{NAME}.fasta'
+        out_tmp = f'{OUTDIR}/{NAME}/{NAME}.fixRCmapping.fasta'
+        output0 = f'{OUTDIR}/{NAME}/{NAME}.fixAdapter.fasta'
 
-    #     
-
-        # ins = denovo_supp()
-        # # chroms = ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY"]
-        # chroms = ["chr21"] 
-        # for chrom in chroms:
-        #     try:
-        #         ins.get_mapped_denovo_bc_strand_dict( mapped_fasta)
-        #     except Exception as e: print(e)
-        
-        # mapped_denovo_bc_strand_dict = ins.mapped_denovo_bc_strand_dict
-        # print(len(mapped_denovo_bc_strand_dict))
-        # with open('mapped_denovo_bc_strand_dict', 'wb') as fp:
-        #     pickle.dump(mapped_denovo_bc_strand_dict, fp)
-
-        correct_direction_mapping(mapped_fasta, denovo_fasta, out_tmp, infile_paf)
+        correct_direction_mapping(denovo_fasta, out_tmp, infile_paf)
         correct_direction_adapter(out_tmp, output0)
-        input_notmapped ='denovo/frag_not_in_mapped.fa'
-        output_notmapped = 'denovo/frag_not_in_mapped.fixAdapter.fa'
+        input_notmapped =f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa'
+        output_notmapped = f'{OUTDIR}/{NAME}/frag_not_in_mapped.fixAdapter.fa'
         correct_direction_adapter(input_notmapped, output_notmapped)
 
-        output = _dir+'denovo/denovo.fixRC.fasta'
+        output = f'{OUTDIR}/{NAME}/{NAME}.fixRC.fasta'
         cmd = f'cp {output0} {output} && cat {output_notmapped} >> {output}'
         subprocess.call(cmd, shell=True)
 

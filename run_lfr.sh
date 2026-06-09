@@ -3,19 +3,28 @@
 #
 # Usage:
 #   cd <analysis_dir>          # must contain config.yaml
-#   bash /path/to/run_lfr.sh   # stLFR
-#   bash /path/to/run_lfr.sh clfr   # cLFR
+#   bash /path/to/run_lfr.sh              # stLFR, 20 cores
+#   bash /path/to/run_lfr.sh clfr 40      # cLFR, 40 cores
 #
 # Prerequisites:
 #   - Snakemake installed and on PATH (conda activate snakemake_env)
 #   - config.yaml copied from config/stlfr.yaml or config/clfr.yaml and filled in
-#   - src_dir in config.yaml points to this repository root
 
 set -euo pipefail
 
-MODE="${1:-stlfr}"
-THREADS="${2:-20}"
 PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODE="stlfr"
+THREADS=20
+
+if [[ "${1:-}" == "stlfr" || "${1:-}" == "clfr" ]]; then
+    MODE="$1"
+    shift
+fi
+
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    THREADS="$1"
+    shift
+fi
 
 if [[ "$MODE" == "clfr" ]]; then
     SNAKEFILE="$PIPELINE_DIR/workflows/clfr.smk"

@@ -21,7 +21,7 @@ rule run_variant_calling:
         shell(" ".join(command))
 
 # Filter to keep pass vars
-# This is necessary for LongHap and HapCut since they don't  check the filter column
+# This is necessary for HapCut since it doesn't check the filter column.
 # rule keep_pass_vars:
 #     input:
 #         "Make_Vcf/step1_haplotyper/{id}_gatk.vcf"

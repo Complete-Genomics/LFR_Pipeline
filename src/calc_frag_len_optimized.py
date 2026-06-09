@@ -40,12 +40,16 @@ import pysam
 import argparse
 import os
 import sys
+from pathlib import Path
 from collections import Counter, defaultdict
 import pickle
 from subprocess import call
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# Import utility functions
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from utility import (
     mismatch_byN, manipulate_df_gaps, write_out_barcode_summary,
     write_out_tsv_and_summary1, write_out_tsv_and_summary2, get_chroms,
@@ -71,8 +75,10 @@ def main():
     chroms = args.chroms
     dirname = args.outdir
     low_memory = args.low_memory
+    keep_read_ids = args.keep_read_ids
     
     print(f"Calculating Fragment Lengths for {len(chroms)} chromosomes", file=sys.stderr)
+    print(f"LFR type: {args.lfr_type}", file=sys.stderr)
     print(f"Mode: {'Low Memory' if low_memory else 'Standard'}", file=sys.stderr)
     
     # Create output directory
@@ -81,11 +87,11 @@ def main():
     # Process BAM file - choose method based on memory mode
     if low_memory:
         barcode_collection, stats = get_reads_low_memory(
-            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads
+            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids
         )
     else:
         barcode_collection, stats = get_reads_parallel(
-            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads
+            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids
         )
     
     read_flag_failed, poor_quality, bc_flag_failed, mapped_flag_failed = stats
@@ -143,19 +149,14 @@ def main():
         barcode_collection_filtered, dirname, write_out_tsv, min_reads, plot_cutoff
     )
     
-    # Combine summaries
+    # Combine summaries in the same order expected by downstream reports.
     try:
         script = f"cat {dirname}/frag_summary_minreads{min_reads}.txt > {dirname}/frag_and_bc_summary.txt && " \
+                 f"grep frag_shorter_total_reads {dirname}/additional_summary_minreads{min_reads}.txt -A 1 >> {dirname}/frag_and_bc_summary.txt && " \
                  f"cat {dirname}/reads_per_bc_bins.txt >> {dirname}/frag_and_bc_summary.txt"
         call(script, shell=True)
     except Exception as e:
         print(f"Warning: Could not combine summaries: {e}", file=sys.stderr)
-    
-    try:
-        script = f"grep frag_shorter_total_reads {dirname}/additional_summary_{min_reads}.txt -A 1 >> {dirname}/frag_and_bc_summary.txt"
-        call(script, shell=True)
-    except Exception:
-        pass
     
     try:
         df_sorted = reads_per_bc_distribution_mapped(dirname, barcode_summary)
@@ -197,6 +198,18 @@ def get_arguments():
                         help="Mapping quality cutoff")
     parser.add_argument("--low_memory", action="store_true",
                         help="Use low memory mode (processes one chromosome at a time)")
+    parser.add_argument("--lfr_type", choices=("stlfr", "clfr"), default="stlfr",
+                        help="Pipeline flavor label for logging and future mode-specific behavior.")
+    parser.add_argument("--n_tolerance", type=int, default=None,
+                        help="Accepted for cLFR compatibility; not used.")
+    parser.add_argument("--sequence_type", default=None,
+                        help="Accepted for cLFR compatibility; not used.")
+    parser.add_argument("--cbc_len", type=int, default=None,
+                        help="Accepted for cLFR compatibility; not used.")
+    parser.add_argument("--BC_type", default=None,
+                        help="Accepted for cLFR compatibility; not used.")
+    parser.add_argument("--keep_read_ids", action="store_true",
+                        help="Store per-fragment ReadID lists. Disabled by default to save memory.")
     
     args = parser.parse_args()
     
@@ -215,7 +228,7 @@ def get_arguments():
     return args
 
 
-def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapping_quality):
+def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids):
     """
     Process a single chromosome and return fragment data.
     
@@ -302,7 +315,7 @@ def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapp
                     'strand_1': 1 if read_strand == 1 else 0,
                     'cigar_matches': [cigar_match],
                     'read_lengths': [read.query_length],
-                    'read_ids': [read.query_name],  # Keep for compatibility
+                    'read_ids': [read.query_name] if keep_read_ids else [],
                 }
             else:
                 data = barcode_data[bc_tag]
@@ -314,7 +327,8 @@ def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapp
                     data['strand_1'] += 1
                 data['cigar_matches'].append(cigar_match)
                 data['read_lengths'].append(read.query_length)
-                data['read_ids'].append(read.query_name)
+                if keep_read_ids:
+                    data['read_ids'].append(read.query_name)
         
         bamfile.close()
         
@@ -350,7 +364,7 @@ def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapp
     return results, stats
 
 
-def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads):
+def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids):
     """
     Process BAM file using multiprocessing (no Ray dependency).
     More memory efficient than Ray for this use case.
@@ -358,13 +372,14 @@ def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, map
     all_results = []
     total_stats = {'read_flag_failed': 0, 'poor_quality': 0, 'bc_flag_failed': 0, 'mapped_flag_failed': 0}
     
-    print(f"Processing {len(chroms)} chromosomes with {n_threads} threads...", file=sys.stderr)
+    workers = max(1, min(n_threads, len(chroms)))
+    print(f"Processing {len(chroms)} chromosomes with {workers} workers...", file=sys.stderr)
     
-    with ProcessPoolExecutor(max_workers=n_threads) as executor:
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
                 process_chromosome, bam_path, chrom, split_dist, 
-                include_dups, read_len, mapping_quality
+                include_dups, read_len, mapping_quality, keep_read_ids
             ): chrom for chrom in chroms
         }
         
@@ -399,7 +414,7 @@ def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, map
     )
 
 
-def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads):
+def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids):
     """
     Process BAM file one chromosome at a time to minimize memory usage.
     Slower but uses much less RAM.
@@ -413,7 +428,7 @@ def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, m
         print(f"  [{i+1}/{len(chroms)}] Processing {chrom}...", file=sys.stderr)
         
         results, stats = process_chromosome(
-            bam_path, chrom, split_dist, include_dups, read_len, mapping_quality
+            bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids
         )
         
         all_results.extend(results)

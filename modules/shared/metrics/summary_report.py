@@ -105,24 +105,6 @@ def get_hapcut_results(path):
     return hapcut_results['phased count:'], hapcut_results['AN50:'], hapcut_results['N50:']
             
                 
-def get_longhap_results(path):
-    '''
-    parse longhap output for results
-    '''
-    with open(path, "r") as longhap:
-        for line in longhap:
-            if line.startswith("N50:"):
-                n_fifty = line.strip().split(":")[1]
-                n_fifty = n_fifty.strip()
-            if line.startswith("AN50:"):
-                an_fifty = line.strip().split(":")[1]
-                an_fifty = an_fifty.strip()
-            if line.startswith("phased_snp:"):
-                phased = line.strip().split()[0].split(":")[1]
-    
-    return phased, an_fifty, n_fifty
-
-
 if __name__ == "__main__":
     import sys
     import yaml
@@ -148,7 +130,6 @@ if __name__ == "__main__":
     picard_metrics = "Align/picard_align_metrics.txt"
     # picard_metrics2 = "Align/picard_align_metrics_BCreads_only.txt"
     coverage_depth = "Align/coverage_depth.txt"
-    longhap = "Make_Vcf/step4_longhap/longhap_results.txt"
     hapcut = "Make_Vcf/step3_hapcut/step4_compare_with_refphasing/hapcut_eval.txt"
     
     
@@ -230,15 +211,6 @@ if __name__ == "__main__":
     except:
         print("Couldn't get hapcut results", file=sys.stderr)
     
-    try:
-        # attempt to parse longhap results
-        phased_lh, an_fifty_lh, n_fifty_lh = get_longhap_results(longhap)
-        print("{}\t{}".format("LongHap AN50:", an_fifty_lh))
-        print("{}\t{}".format("LongHap N50:", n_fifty_lh))
-        print("{}\t{}".format("LongHap Phased SNPs:", phased_lh))
-    except:
-        print("Couldn't get longhap results", file=sys.stderr)
-
     file = 'Align/mapped_uniq_bc_bases_count.txt'
     if os.path.exists(file):
         try:
