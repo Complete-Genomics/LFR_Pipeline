@@ -1,5 +1,6 @@
 # include the config file
 configfile: "config.yaml"
+include: "bootstrap.smk"
 
 SEQUENCE_TYPE =config['params']['sequence_type'].lower()
 MRNA_MAPPER =config['params']['mrna_mapper'].lower()

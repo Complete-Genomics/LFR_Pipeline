@@ -72,11 +72,12 @@ rule picard_align_metrics:
     output:
         "Align/picard_align_metrics.txt"
     params:
-        src_dir = config['params']['src_dir']
+        src_dir = config['params']['src_dir'],
+        python = config['params']['general_python']
     benchmark:
         "Benchmarks/metrics.picard_align_metrics.txt"
     shell:
-        "perl {params.src_dir}/modules/shared/metrics/picard.pl {input} "
+        "{params.python} {params.src_dir}/modules/shared/metrics/picard.py {input} "
         "samtools > {output}"
 
 

@@ -1,5 +1,6 @@
 # include the config file
 configfile: "config.yaml"
+include: "bootstrap.smk"
 import pysam
 
 SEQUENCE_TYPE =config['params']['sequence_type'].lower()
