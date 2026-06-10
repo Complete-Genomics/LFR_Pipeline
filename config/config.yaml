@@ -1,0 +1,194 @@
+samples:
+    ########### start fill ###
+    # list of lanes to use. format as fastq/V350094071_L04, leave blank if start from split.read.fq.gz,
+    # in the format of *_1.fq.gz
+    lanes: [V350132145]
+    name: "V350132145"
+    ########### end fill ###
+
+    # specifies expected location of split reads [data/split_read.1.fq.gz, data/split_read.2.fq.gz] for PE
+    # SE read treated as read2
+    fastq: [data/split_read.1.fq.gz, data/split_read.2.fq.gz]
+    # path for reads.fq.gz before splitting, leave blank if start from split.read.fq.gz,
+    fq_path: "../fastq"
+    # sample or id to use for generating targets
+    id: "data"
+    # Chromosomes to evaluate for fragment length and phasing
+    # For mRNA/cDNA leave empty; cLFR may include ERCC spike-ins
+    chroms: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12, chr13, chr14, chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22, chrX, chrY]
+    # cLFR with ERCC: add ERCC-00130, ERCC-00096, ERCC-00116, ERCC-00025
+
+modules:
+    ### start fill ### for standard analysis set True: BCsplit, mapping, eval_metrics
+    BCsplit: True
+    mapping: True
+    eval_metrics: True
+    # stLFR fragment analyses
+    LFR: False                   # stLFR: True
+    # stLFR BC+gDNA mode (overrides other modules)
+    BCgDNA: False
+    variant_calling: False
+    phasing: False
+    benchmarking: False
+    # cLFR-specific modules
+    exon2fasta: False
+    consensus_fasta: False
+    rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
+    frag_de_novo: False
+    ### end fill ###
+
+    mate_pair_analysis: False
+    read_overlap_analysis: False
+    duplicate_plot: False
+
+params:
+    ########### start fill ###
+    downsample_ratio: 1.0
+    batch_id: ""
+    correct_rc: True
+    # map mrna library to genome: 'star' (gDNA uses BWA), 'minimap2'
+    mrna_mapper: 'star'
+    library_species: 'human'
+    ref_id: ''
+    # 'gdna' (map with BWA) or 'mrna' (map with STAR/minimap2)
+    library_type: 'gdna'         # cLFR: 'mrna'
+    sequence_type: 'pe'
+    # stLFR: 'standard'; variants: 'standard_ac_swap', 'standard_gc_swap', 'pcrfree', 'BCgDNA'
+    # cLFR: 'random_bc'; variants: 'random_bc_umi_rc', 'combined'
+    bc_condition: 'standard'     # cLFR: 'random_bc'
+    total_r2_len: 100            # cLFR: 185
+    total_r1_len: 0
+    bc_start: 0
+    # stLFR BC length (42bp); set 0 for cLFR
+    sbc_len: 42                  # cLFR: 0
+    # cLFR random BC length (15bp); set 0 for stLFR
+    cbc_len: 0                   # cLFR: 15
+    gdna_start: 1
+    read_len: 100                # cLFR: 150
+    gdna_start_r1: 1
+    read_len_r1: 100             # cLFR: 150
+    additional_bc_start: 0
+    additional_bc_len: 0
+    additional_bc_len_r1: 0
+    adapter_len: 0
+    ########### end fill ###
+
+    splitNfq: 32
+    is_fulllane_unfiltered: True
+    bwa_mem: 'mem'
+    gc_swap: False
+    platform: "BGI-seq"
+    barcode: "/barcode.list"
+    barcode_RC: "/barcode_RC.list"
+    barcode_GCswap: "/barcode.GCswap.list"
+    barcode_RC_GCswap: "/barcode_RC.GCswap.list"
+    enforced_bc_list: ""
+
+    ref_fa: "/path/to/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa"
+    ref_fa_mrna: "/path/to/hg38/GRCh38_latest_rna.fna.ercc.fasta"
+    ref_fa_other: "/path/to/ref/other.fa"
+    toolsdir: "/path/to/CGI_WGS_Pipeline/Data_and_Tools"
+    src_dir: "/path/to/CGI_LFR_pipeline/"
+    gatk_install: "/path/to/gatk"
+    calc_frag_python: "/path/to/python"
+    dbsnp_path: "/path/to/dbsnp_138.hg38.chrfix.vcf.gz"
+    gc_bias_index: "/path/to/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.500.gc"
+    rtg_install: "/path/to/rtg"
+    gcbias_python: "/path/to/python"
+    general_python: "/path/to/python"
+    tabix: "/opt/cgi-tools/bin/tabix"
+    hapcut2: "/path/to/hapcut2/bin"
+
+    bcftools: "/opt/cgi-tools/bin/bcftools"
+    hapcut_link_dist: 100000
+    wenlan_python: "/opt/cgi-anaconda2-4.4.0/bin/python"
+
+    # mRNA mapper tools (required when library_type: 'mrna')
+    star: "/path/to/STAR"
+    star_index: "/path/to/star_index"
+    hisat2: "/path/to/hisat2"
+    hisat2_index: "/path/to/hisat2_index"
+    hisat2_splicesites: "/path/to/splicesites.txt"
+    minimap2: "/path/to/minimap2"
+    minimap2_anno_bed: "/path/to/anno.bed12"
+
+    # denovo assembly tools (required when modules.frag_de_novo: True)
+    megahit: "/path/to/megahit"
+    bbduk: "/path/to/bbduk.sh"
+    bgzip: "/path/to/bgzip"
+
+    # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
+    featurecounts: "/path/to/featureCounts"
+    ercc_gtf: "/path/to/ERCC92.gtf"
+    ercc_ref_gc: "/path/to/ercc_ref_gc.txt"
+
+    # exon2fasta combined-BC mode (required when bc_condition: 'combined')
+    jvarkit_samjdk: "/path/to/samjdk.jar"
+
+    # Mandalorion/SQANTI3 (required when modules.consensus_fasta: True)
+    mandalorion: "/path/to/Mando.py"
+    mandalorion_python: "/path/to/python"
+    mandalorion_gtf: "/path/to/gencode.annotation.gtf"
+    mandalorion_ref: "/path/to/genome.fa"
+    sqanti3_script: "/path/to/sqanti3_qc.py"
+    sqanti3_python: "/path/to/python"
+    sqanti3_cage_peak: "/path/to/human.refTSS.bed"
+    sqanti3_polyA_motif: "/path/to/polyA_motif.txt"
+
+calc_frag:
+    ########### start fill ###
+    # stLFR defaults: minreads=4, mapping_quality=30
+    # cLFR defaults: minreads=100, mapping_quality=0
+    minreads: 'default'
+    mapping_quality: 'default'
+    min_frag: 500
+    minreads_fasta: 100
+    calc_bc_condition: ''
+    ########### end fill ###
+
+    n_tolerance: 2
+    split_dist: [50000]
+    include_dups: True
+    ray_mem: "200,1024,100,1024"
+    writeouttsvs: True
+    num_bin_in_frag: 10
+    ylim: 50
+
+frag_de_novo:
+    run_parallel: False
+    reads_per_BC: 50
+    margin: 5
+    denovo_assembler: "/path/to/spades.py"
+    spades_phred_offset: 55
+    quast_dir: "/path/to/quast.py"
+    quast_min_contig: 100
+    quast_space_efficient: True
+    minimap: "/path/to/minimap2"
+    denovo_type: 'correct_rc'
+    end_idx: 485000000
+    start_idx: 1
+    flank_end: 30
+    adapter_seq: "CTCAGCAGAGGG"
+    min_ctg_len: 400
+    num_processes: 20
+
+umi:
+    umi_pos_strand_batch: ""
+
+benchmark:
+    benchmark_snp: "/path/to/hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"
+    benchmark_indel: "/path/to/hg38_GIAB_HG001/benchmark_indel.chrfix.vcf.gz"
+    bedfile: "/path/to/hg38_GIAB_HG001/benchmark_bed.chrfix.bed"
+    ref_sdf: "/path/to/hg38_benchmark_ref/GRCh38.sdf"
+    truth_vcf_dir: ""
+    vcf_benchmark: ""
+
+threads:
+    bwa: 100
+    haplotyper: 100
+    metrics: 10
+    gnu_parallel: 20
+    calc_frag: 4
+    split_group: 80
+    quast: 4
+    supernova: 100
