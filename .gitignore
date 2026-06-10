@@ -3,3 +3,4 @@ config/deploy
 *.pyc
 .DS_Store
 */__pycache__
+test
