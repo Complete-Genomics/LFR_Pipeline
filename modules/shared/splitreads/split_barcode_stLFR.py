@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument("--swap", choices=("none", "ac", "gc"), default="none")
     parser.add_argument(
         "--output_mode",
-        choices=("single", "separate", "stratified"),
+        choices=("single", "separate", "stratified", "cwgs"),
         default="single",
     )
     parser.add_argument("--threads", type=int, default=1)
@@ -183,7 +183,7 @@ def empty_outputs(output_mode):
         "nobc1_1": [],
         "nobc1_2": [],
     }
-    if output_mode == "single":
+    if output_mode in ("single", "cwgs"):
         return {key: outputs[key] for key in ("main1", "main2")}
     if output_mode == "separate":
         return {key: outputs[key] for key in ("main1", "main2", "nobc1", "nobc2")}
@@ -250,7 +250,7 @@ def process_chunk(item):
                 stats["barcode_order"].append(barcode)
             stats["barcode_reads"][barcode] += 1
             hash_string = ""
-            if output_mode != "stratified":
+            if output_mode not in ("stratified", "cwgs"):
                 hash_string = (
                     BARCODE_HASH_STRING[b1]
                     + BARCODE_HASH_STRING[b2]
@@ -261,7 +261,9 @@ def process_chunk(item):
                 r1_header, r1_seq, r1_plus, r1_qual = r1
                 r1_seq = translate(r1_seq, swap)
                 out_header = "%s#%s#/1\tBX:Z:%s" % (id_str, barcode, barcode)
-                if output_mode != "stratified":
+                if output_mode == "cwgs":
+                    out_header = "%s#%s/1" % (id_str, barcode)
+                elif output_mode != "stratified":
                     out_header = "%s#%s/1\tBX:Z:%s\tBC:Z:%s" % (
                         id_str, barcode, barcode, hash_string
                     )
@@ -275,7 +277,9 @@ def process_chunk(item):
                 ))
 
             out_header = "%s#%s#/2\tBX:Z:%s" % (id_str, barcode, barcode)
-            if output_mode == "stratified" and additional_bc_len > 0:
+            if output_mode == "cwgs":
+                out_header = "%s#%s/2" % (id_str, barcode)
+            elif output_mode == "stratified" and additional_bc_len > 0:
                 out_header = "%s#%s_%s#/2\tBX:Z:%s" % (
                     id_str, barcode, additional_bc, barcode
                 )
@@ -296,18 +300,21 @@ def process_chunk(item):
         stats["barcode_reads"]["0_0_0"] += 1
         hash_string = b1 + b2 + b3
 
-        if output_mode in ("single", "separate"):
+        if output_mode in ("single", "separate", "cwgs"):
             out1_key, out2_key = ("main1", "main2")
             if output_mode == "separate":
                 out1_key, out2_key = ("nobc1", "nobc2")
 
             if read_len_r1 > 0 and r1 is not None:
                 r1_header, r1_seq, r1_plus, r1_qual = r1
-                r1_seq = translate(r1_seq, swap) if output_mode == "single" else r1_seq
-                out_header = "%s#0_0_0/1\tBX:Z:0_0_0\tBC:Z:%s" % (
-                    id_str, hash_string
-                )
-                if additional_bc_len > 0:
+                r1_seq = translate(r1_seq, swap) if output_mode in ("single", "cwgs") else r1_seq
+                if output_mode == "cwgs":
+                    out_header = "%s#0_0_0/1" % id_str
+                else:
+                    out_header = "%s#0_0_0/1\tBX:Z:0_0_0\tBC:Z:%s" % (
+                        id_str, hash_string
+                    )
+                if additional_bc_len > 0 and output_mode != "cwgs":
                     out_header += "\tMI:Z:%s" % additional_bc
                 outputs[out1_key].append(make_record(
                     out_header,
@@ -316,10 +323,13 @@ def process_chunk(item):
                     substr(r1_qual, gdna_start_r1, read_len_r1),
                 ))
 
-            out_header = "%s#0_0_0/2\tBX:Z:0_0_0\tBC:Z:%s" % (
-                id_str, hash_string
-            )
-            if additional_bc_len > 0:
+            if output_mode == "cwgs":
+                out_header = "%s#0_0_0/2" % id_str
+            else:
+                out_header = "%s#0_0_0/2\tBX:Z:0_0_0\tBC:Z:%s" % (
+                    id_str, hash_string
+                )
+            if additional_bc_len > 0 and output_mode != "cwgs":
                 out_header += "\tMI:Z:%s" % additional_bc
             outputs[out2_key].append(make_record(
                 out_header,
@@ -536,7 +546,7 @@ def main():
     if is_clfr:
         barcode_hash, barcode_hash_string = {}, {}
     else:
-        need_string_hash = args.output_mode != "stratified"
+        need_string_hash = args.output_mode not in ("stratified", "cwgs")
         barcode_hash, barcode_hash_string, barcode_count = load_barcodes(
             args.barcode, need_string_hash
         )
