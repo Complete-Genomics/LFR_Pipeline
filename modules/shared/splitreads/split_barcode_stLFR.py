@@ -10,6 +10,8 @@ import argparse
 import gzip
 import multiprocessing as mp
 import os
+import shutil
+import subprocess
 import sys
 from collections import defaultdict
 
@@ -49,6 +51,11 @@ def parse_args():
         type=int,
         default=10000,
         help="Read pairs per worker chunk [default: 10000].",
+    )
+    parser.add_argument(
+        "--pigz",
+        default="pigz",
+        help="pigz executable for parallel output compression; use 'none' to disable.",
     )
     args = parser.parse_args()
     if not args.barcode and not args.cbc_len:
@@ -100,6 +107,34 @@ def init_worker(barcode_hash, barcode_hash_string, options):
 
 def open_text_gzip(path, mode):
     return gzip.open(path, mode, compresslevel=6)
+
+
+class PigzTextWriter:
+    def __init__(self, path, pigz_cmd, threads):
+        self.path = path
+        self.out = open(path, "wb")
+        self.proc = subprocess.Popen(
+            [pigz_cmd, "-p", str(max(1, threads)), "-c"],
+            stdin=subprocess.PIPE,
+            stdout=self.out,
+        )
+
+    def write(self, payload):
+        self.proc.stdin.write(payload.encode())
+
+    def close(self):
+        if self.proc.stdin is not None:
+            self.proc.stdin.close()
+        ret = self.proc.wait()
+        self.out.close()
+        if ret != 0:
+            raise RuntimeError("pigz failed for %s with exit code %s" % (self.path, ret))
+
+
+def open_output_gzip(path, pigz_cmd, threads):
+    if pigz_cmd and pigz_cmd.lower() != "none" and shutil.which(pigz_cmd):
+        return PigzTextWriter(path, pigz_cmd, threads)
+    return open_text_gzip(path, "wt")
 
 
 def read_fastq_record(handle):
@@ -553,11 +588,12 @@ def main():
     options = vars(args).copy()
     output_handles = {}
     paths = output_paths(args.output, args.output_mode)
+    output_threads = max(1, threads // max(1, len(paths)))
     for key, path in paths.items():
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        output_handles[key] = open_text_gzip(path, "wt")
+        output_handles[key] = open_output_gzip(path, args.pigz, output_threads)
 
     aggregate = {
         "reads_num": 0,
