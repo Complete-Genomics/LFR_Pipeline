@@ -41,7 +41,7 @@ rule calc_frag_len:
         writeouttsvs = config['calc_frag']['writeouttsvs'],
         mapping_quality = MAPPING_QUALITY,
         BC_type = config['params']['bc_condition'],
-        python = config['params']['general_python'],
+        python = config['params']['calc_frag_python'],
 
     threads:
         config['threads']['calc_frag']
@@ -50,10 +50,11 @@ rule calc_frag_len:
     run:
         # fix error 'too long input for bash' for cDNA ref
         command = ["{params.python}",
-                "{params.src_dir}/modules/clfr/calc_frag_len/calc_frag_len.random_bc.py",
+                "{params.src_dir}/src/calc_frag_len_optimized.py",
                 "--minfrag {params.min_frag}",
                 "--splitdist {wildcards.split}",
                 "--readlen {params.read_len}",
+                "--lfr_type clfr",
                 "--threads {threads}",
                 "--minreads {params.minreads}",
                 "--n_tolerance {params.n_tolerance}", 

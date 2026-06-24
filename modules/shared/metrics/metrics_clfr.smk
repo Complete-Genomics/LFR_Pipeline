@@ -29,12 +29,13 @@ rule duplicate_analysis:
         "Align/Duplicate_Analysis/duplicate_rate",
         "Align/Duplicate_Analysis/PE_dup_reads"
     params:
-        toolsdir = config['params']['toolsdir']
+        src_dir = config['params']['src_dir'],
+        python = config['params']['general_python']
     benchmark:
         "Benchmarks/metrics.duplicate_analysis.txt"
     shell:
-        "samtools view {input} | "
-            "perl {params.toolsdir}/tools/Duplicate_analysis.pl - Align/Duplicate_Analysis"
+        "{params.python} {params.src_dir}/modules/shared/metrics/duplicate_analysis.py "
+        "{input} Align/Duplicate_Analysis"
 
 
 # This generates a plot of the duplicate analysis
@@ -72,11 +73,12 @@ rule picard_align_metrics:
     output:
         "Align/picard_align_metrics.txt"
     params:
-        src_dir = config['params']['src_dir']
+        src_dir = config['params']['src_dir'],
+        python = config['params']['general_python']
     benchmark:
         "Benchmarks/metrics.picard_align_metrics.txt"
     shell:
-        "perl {params.src_dir}/modules/shared/metrics/picard.pl {input} "
+        "{params.python} {params.src_dir}/modules/shared/metrics/picard.py {input} "
         "samtools > {output}"
 
 
@@ -89,13 +91,14 @@ rule coverage_depth:
     output:
         "Align/coverage_depth.txt"
     params:
-        toolsdir=config['params']['toolsdir'],
+        python = config['params']['general_python'],
         src_dir = config['params']['src_dir'],
         ref = REF
     benchmark:
         "Benchmarks/metrics.coverage_depth.txt"
     shell:
-        "perl {params.toolsdir}/tools/depthV2.0.pl -l $({params.toolsdir}/tools/fasta_non_gapped_bases.py {params.ref}) {input} Align > {output}"
+        "{params.python} {params.src_dir}/modules/shared/metrics/coverage_depth.py "
+        "--bam {input} --ref {params.ref} --outdir Align > {output}"
 
 
 # This is one of the plots that isn't looked at frequently but can be turned on in the config file

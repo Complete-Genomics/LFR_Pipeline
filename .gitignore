@@ -1,2 +1,6 @@
 memory
 config/
+*.pyc
+.DS_Store
+*/__pycache__
+test

@@ -14,47 +14,59 @@ samples:
     # sample or id to use for generating targets
     id: "data"
     # Chromosomes to evaluate for fragment length and phasing
-    # Leave empty for cDNA/mRNA ref or if there are too many chromosomes to specify or you're unsure
+    # For mRNA/cDNA leave empty; cLFR may include ERCC spike-ins
     chroms: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12, chr13, chr14, chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22, chrX, chrY]
+    # cLFR with ERCC: add ERCC-00130, ERCC-00096, ERCC-00116, ERCC-00025
 
 modules:
-    ### start fill ### for standard analysis set True: BCsplit, mapping, LFR, eval_metrics
+    ### start fill ### for standard analysis set True: BCsplit, mapping, eval_metrics
     BCsplit: True
     mapping: True
-    # stLFR-specific fragment analyses
-    LFR: True
     eval_metrics: True
+    # stLFR fragment analyses
+    LFR: False                   # stLFR: True
+    # stLFR BC+gDNA mode (overrides other modules)
+    BCgDNA: False
     variant_calling: False
     phasing: False
     benchmarking: False
-    # BCgDNA: stLFR bc followed by gDNA analysis (overrides other modules)
-    BCgDNA: False
+    # cLFR-specific modules
+    exon2fasta: False
+    consensus_fasta: False
+    rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
+    frag_de_novo: False
     ### end fill ###
 
     mate_pair_analysis: False
     read_overlap_analysis: False
     duplicate_plot: False
+
 params:
     ########### start fill ###
+    downsample_ratio: 1.0
+    batch_id: ""
     correct_rc: True
+    # map mrna library to genome: 'star' (gDNA uses BWA), 'minimap2'
     mrna_mapper: 'star'
     library_species: 'human'
     ref_id: ''
-    library_type: 'gdna'
+    # 'gdna' (map with BWA) or 'mrna' (map with STAR/minimap2)
+    library_type: 'gdna'         # cLFR: 'mrna'
     sequence_type: 'pe'
-    # stLFR: use 'standard'; variants: 'standard_ac_swap', 'standard_gc_swap', 'pcrfree', 'BCgDNA'
-    bc_condition: 'standard'
-    total_r2_len: 100
+    # stLFR: 'standard'; variants: 'standard_ac_swap', 'standard_gc_swap', 'pcrfree', 'BCgDNA'
+    # cLFR: 'random_bc'; variants: 'random_bc_umi_rc', 'combined'
+    bc_condition: 'standard'     # cLFR: 'random_bc'
+    total_r2_len: 100            # cLFR: 185
     total_r1_len: 0
     bc_start: 0
-    # stLFR BC length (42bp)
-    sbc_len: 42
-    # not used for stLFR
-    cbc_len: 0
+    # stLFR BC length (42bp); set 0 for cLFR
+    sbc_len: 42                  # cLFR: 0
+    # cLFR random BC length (15bp); set 0 for stLFR
+    cbc_len: 0                   # cLFR: 15
     gdna_start: 1
-    read_len: 100
+    read_len: 100                # cLFR: 150
     gdna_start_r1: 1
-    read_len_r1: 100
+    read_len_r1: 100             # cLFR: 150
     additional_bc_start: 0
     additional_bc_len: 0
     additional_bc_len_r1: 0
@@ -97,10 +109,36 @@ params:
     hisat2: "/path/to/hisat2"
     hisat2_index: "/path/to/hisat2_index"
     hisat2_splicesites: "/path/to/splicesites.txt"
+    minimap2: "/path/to/minimap2"
+    minimap2_anno_bed: "/path/to/anno.bed12"
+
+    # denovo assembly tools (required when modules.frag_de_novo: True)
+    megahit: "/path/to/megahit"
+    bbduk: "/path/to/bbduk.sh"
+    bgzip: "/path/to/bgzip"
+
+    # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
+    featurecounts: "/path/to/featureCounts"
+    ercc_gtf: "/path/to/ERCC92.gtf"
+    ercc_ref_gc: "/path/to/ercc_ref_gc.txt"
+
+    # exon2fasta combined-BC mode (required when bc_condition: 'combined')
+    jvarkit_samjdk: "/path/to/samjdk.jar"
+
+    # Mandalorion/SQANTI3 (required when modules.consensus_fasta: True)
+    mandalorion: "/path/to/Mando.py"
+    mandalorion_python: "/path/to/python"
+    mandalorion_gtf: "/path/to/gencode.annotation.gtf"
+    mandalorion_ref: "/path/to/genome.fa"
+    sqanti3_script: "/path/to/sqanti3_qc.py"
+    sqanti3_python: "/path/to/python"
+    sqanti3_cage_peak: "/path/to/human.refTSS.bed"
+    sqanti3_polyA_motif: "/path/to/polyA_motif.txt"
 
 calc_frag:
     ########### start fill ###
     # stLFR defaults: minreads=4, mapping_quality=30
+    # cLFR defaults: minreads=100, mapping_quality=0
     minreads: 'default'
     mapping_quality: 'default'
     min_frag: 500
@@ -115,6 +153,27 @@ calc_frag:
     writeouttsvs: True
     num_bin_in_frag: 10
     ylim: 50
+
+frag_de_novo:
+    run_parallel: False
+    reads_per_BC: 50
+    margin: 5
+    denovo_assembler: "/path/to/spades.py"
+    spades_phred_offset: 55
+    quast_dir: "/path/to/quast.py"
+    quast_min_contig: 100
+    quast_space_efficient: True
+    minimap: "/path/to/minimap2"
+    denovo_type: 'correct_rc'
+    end_idx: 485000000
+    start_idx: 1
+    flank_end: 30
+    adapter_seq: "CTCAGCAGAGGG"
+    min_ctg_len: 400
+    num_processes: 20
+
+umi:
+    umi_pos_strand_batch: ""
 
 benchmark:
     benchmark_snp: "/path/to/hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"

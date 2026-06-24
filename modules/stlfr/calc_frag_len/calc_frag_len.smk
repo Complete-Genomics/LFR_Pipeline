@@ -25,22 +25,22 @@ rule calc_frag_len:
         toolsdir = config['params']['toolsdir'],
         include_dups = config['calc_frag']['include_dups'],
         minreads = MINREADS,
-        umi_analysis = config['modules']['umi_analysis'],
         ray_mem = config['calc_frag']['ray_mem'],
         src_dir = config['params']['src_dir'],
         writeouttsvs = config['calc_frag']['writeouttsvs'],
         mapping_quality = MAPPING_QUALITY,
-        python = config['params']['general_python']
+        python = config['params']['calc_frag_python']
     threads:
         config['threads']['calc_frag']
     benchmark:
         "Benchmarks/calc_frag_len.calc_frag_len_{split}.txt"
     run:
         command = ["{params.python}",
-                   "{params.src_dir}/modules/stlfr/calc_frag_len/calc_frag_len.py",
+                   "{params.src_dir}/src/calc_frag_len_optimized.py",
                    "--minfrag {params.min_frag}",
                    "--splitdist {wildcards.split}",
                    "--readlen {params.read_len}",
+                   "--lfr_type stlfr",
                    "--threads {threads}",
                    "--minreads {params.minreads}",
                    "--ray_mem {params.ray_mem} ",

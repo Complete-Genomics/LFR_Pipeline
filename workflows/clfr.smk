@@ -1,5 +1,6 @@
 # include the config file
 configfile: "config.yaml"
+include: "bootstrap.smk"
 import pysam
 
 SEQUENCE_TYPE =config['params']['sequence_type'].lower()
@@ -92,7 +93,7 @@ def run_all_input(wildcards):
     if config['modules']['duplicate_plot']:
         run_all_files.append("Benchmarks/metrics.duplicate_plot.txt")
 
-    # if phasing is set add targets for hapcut and longhap analysis
+    # if phasing is set add targets for hapcut analysis
     if config['modules']['phasing']:
         for CHR in CHROMS:
             run_all_files.append("Make_Vcf/step3_hapcut/step3_run_hapcut2_10xpipeline/s3_hapcut_output/{}_hapblock_{}".format(config['samples']['id'], CHR))
