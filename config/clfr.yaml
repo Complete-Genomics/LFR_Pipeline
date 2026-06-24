@@ -115,7 +115,7 @@ params:
     bgzip: "/path/to/bgzip"
 
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
-    featurecounts: "/path/to/featureCounts"
+    # featurecounts: "/path/to/featureCounts"
     ercc_gtf: "/path/to/ERCC92.gtf"
     ercc_ref_gc: "/path/to/ercc_ref_gc.txt"
 
@@ -165,7 +165,6 @@ frag_de_novo:
     quast_dir: "/path/to/quast.py"
     quast_min_contig: 100
     quast_space_efficient: True
-    minimap: "/path/to/minimap2"
     denovo_type: 'correct_rc'
     end_idx: 485000000
     start_idx: 1

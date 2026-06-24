@@ -146,13 +146,12 @@ rule ercc_count:
     output:
         "Align/ercc_count.txt"
     params:
-        featurecounts = config['params']['featurecounts'],
         ercc_gtf = config['params']['ercc_gtf']
     run:
         if SEQUENCE_TYPE=='pe':
-            shell("{params.featurecounts} -T 64 -p -a {params.ercc_gtf} -g gene_id -o Align/ercc_count.txt Align/data.sort.markdup.bam && sed -i '1,1d' Align/ercc_count.txt")
+            shell("featureCounts -T 64 -p -a {params.ercc_gtf} -g gene_id -o Align/ercc_count.txt Align/data.sort.markdup.bam && sed -i '1,1d' Align/ercc_count.txt")
         elif SEQUENCE_TYPE=='se':
-            shell("{params.featurecounts} -T 64 -a {params.ercc_gtf} -g gene_id -o Align/ercc_count.txt Align/data.sort.markdup.bam && sed -i '1,1d' Align/ercc_count.txt")
+            shell("featureCounts -T 64 -a {params.ercc_gtf} -g gene_id -o Align/ercc_count.txt Align/data.sort.markdup.bam && sed -i '1,1d' Align/ercc_count.txt")
 
 
 rule ercc_plot:

@@ -353,7 +353,7 @@ rule trim_reads:
         t1= "data/split_read_1_trimmed.fastq.gz",
         t2= "data/split_read_2_trimmed.fastq.gz"
     params:
-        bbduk = bbduk,
+        bbduk = config['params']['bbduk'],
         sequence_type= config['params']['sequence_type'].lower()
     shell:
         """

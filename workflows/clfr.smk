@@ -46,7 +46,7 @@ def run_all_input(wildcards):
     run_all_files = ["data/split_read.2.fq.gz"]
 
     if config['modules']['mapping']==True:
-        run_all_files.extend(["Align/{}.sort.bam".format(config['samples']['id']),])
+        run_all_files.extend(["keep/Align/{}.sort.bam".format(config['samples']['id']),])
 
     if config['modules']['eval_metrics']==True:
         run_all_files.extend([
@@ -107,17 +107,18 @@ def run_all_input(wildcards):
             "frag_de_novo/bc_list.txt",
             "frag_de_novo/done.fq"])
 
-    if config['modules']['exon2fasta'] == True:
-        run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
+    # if config['modules']['exon2fasta'] == True:
+    #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
 
     if config['modules']['consensus_fasta'] == True:
-        run_all_files.extend([ 'Align/consensus/consensus.fasta', "Align/consensus/consensus_frag_length_distribution.pdf",'Align/consensus/consensus.fixRC.fasta',"Align/consensus/consensus.fixRC_SQANTI3_report.pdf"])
+        run_all_files.extend([ 'Align/consensus/consensus.fasta', "Align/consensus/consensus_frag_length_distribution.pdf",'Align/consensus/consensus.fixRC.fasta'])
+        # "Align/consensus/consensus.fixRC_SQANTI3_report.pdf"])
 
     RNA_16S_MODE = config['modules'].get('rna_16s', 'align_ref')
     if RNA_16S_MODE == 'meta_denovo':
         run_all_files.extend(["rna_16s/meta_denovo/contigs.fasta", "rna_16s/quast/meta_denovo/report.txt"])
-    if RNA_16S_MODE == 'align_ref':
-        run_all_files.extend([ "rna_16s/align_ref/abundance_align_ref.png"])
+    # if RNA_16S_MODE == 'align_ref':
+    #     run_all_files.extend([ "rna_16s/align_ref/abundance_align_ref.png"])
     if RNA_16S_MODE == 'frag_denovo':
         run_all_files.extend(["rna_16s/frag_denovo/all.contigs_max.fasta", "rna_16s/quast/frag_denovo/report.txt"])
 
@@ -145,6 +146,6 @@ else:
 include: src_dir+"modules/shared/splitreads/splitreads.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 include: src_dir+"modules/clfr/consensus_fasta/consensus_fasta.smk"
-include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
-include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
+# include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
+# include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
 include: src_dir+"modules/clfr/denovo/denovo_clfr.smk"

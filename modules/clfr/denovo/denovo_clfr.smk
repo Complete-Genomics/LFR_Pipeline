@@ -44,27 +44,27 @@ rule filter_reads2:
 
 
 
-rule trim_reads:
-    input:
-        f1="denovo/data_R1_filtered.fastq.gz",
-        f2="denovo/data_R2_filtered.fastq.gz"
-    output:
-        t1= "denovo/data_R1_filtered_trimmed.fastq.gz",
-        t2= "denovo/data_R2_filtered_trimmed.fastq.gz"
-    params:
-        bbduk = bbduk,
-        sequence_type= config['params']['sequence_type'].lower()
-    shell:
-        """
-        if [[ "{params.sequence_type}" == "pe" ]]; then
-            {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl 
-        elif [[ "{params.sequence_type}" == "se" ]]; then
-            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl && touch denovo/data_R1_filtered_trimmed.fastq.gz
-        else
-            echo "Unknown type {params.sequence_type}" >&2;
-            exit 1;
-        fi
-        """
+# rule trim_reads:
+#     input:
+#         f1="denovo/data_R1_filtered.fastq.gz",
+#         f2="denovo/data_R2_filtered.fastq.gz"
+#     output:
+#         t1= "denovo/data_R1_filtered_trimmed.fastq.gz",
+#         t2= "denovo/data_R2_filtered_trimmed.fastq.gz"
+#     params:
+#         bbduk = bbduk,
+#         sequence_type= config['params']['sequence_type'].lower()
+#     shell:
+#         """
+#         if [[ "{params.sequence_type}" == "pe" ]]; then
+#             {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl 
+#         elif [[ "{params.sequence_type}" == "se" ]]; then
+#             {params.bbduk} in={input.f2} out={output.t2} qtrim=rl && touch denovo/data_R1_filtered_trimmed.fastq.gz
+#         else
+#             echo "Unknown type {params.sequence_type}" >&2;
+#             exit 1;
+#         fi
+#         """
 
 
 rule reformat_fasta1:
@@ -149,7 +149,7 @@ rule map_denovo:
     output:
         "denovo/denovo.paf"
     params:
-        minimap = config['frag_de_novo']['minimap'],
+        minimap = config['params']['minimap2'],
         refgenome = config['params']['ref_fa_mrna']
     run:
         command = ["{params.minimap} -x asm20 -t 20 ",

@@ -105,7 +105,7 @@ rule map_fasta_consensus:
     output:
         "Align/consensus/consensus.paf"
     params:
-        minimap = config['frag_de_novo']['minimap'],
+        minimap = config['params']['minimap2'],
         refgenome = config['params']['ref_fa_mrna']
     run:
         command = ["{params.minimap} -x asm20 -t 20 ",
@@ -139,53 +139,53 @@ rule correc_direction_consensus:
         else:
             shell("cd Align/consensus && ln -s consensus.fasta consensus.fixRC.fasta ")
 
-rule eval_Mandalorion:
-    input:
-        "Align/consensus/consensus.fixRC.fasta"
-    output:
-        "Align/tmp/mando/Isoforms.filtered.clean.gtf"
-    params:
-        gtf = config['params']['mandalorion_gtf'],
-        ref = config['params']['mandalorion_ref'],
-        src = config['params']['mandalorion'],
-        python_exec = config['params']['mandalorion_python'],
-        cpus = config['threads']['metrics']
-    shell:
-        """
-        {params.python_exec} {params.src} -g {params.gtf} -G {params.ref} -f {input} -R 1 -t {params.cpus} -p Align/tmp/mando
-        """
+# rule eval_Mandalorion:
+#     input:
+#         "Align/consensus/consensus.fixRC.fasta"
+#     output:
+#         "Align/tmp/mando/Isoforms.filtered.clean.gtf"
+#     params:
+#         gtf = config['params']['mandalorion_gtf'],
+#         ref = config['params']['mandalorion_ref'],
+#         src = config['params']['mandalorion'],
+#         python_exec = config['params']['mandalorion_python'],
+#         cpus = config['threads']['metrics']
+#     shell:
+#         """
+#         {params.python_exec} {params.src} -g {params.gtf} -G {params.ref} -f {input} -R 1 -t {params.cpus} -p Align/tmp/mando
+#         """
 
 
 
 
-rule eval_SQANTI3:
-    input:
-        "Align/tmp/mando/Isoforms.filtered.clean.gtf"
-    output:
-        "Align/tmp/SQANTI3_QC_output/data_SQANTI3_report.pdf"
-    params:
-        python_exec = config['params']['sqanti3_python'],
-        sqanti3_script = config['params']['sqanti3_script'],
-        ref_gtf = config['params']['mandalorion_gtf'],
-        ref_fasta = config['params']['mandalorion_ref'],
-        cage_peak_bed = config['params']['sqanti3_cage_peak'],
-        polyA_motif_list = config['params']['sqanti3_polyA_motif'],
-        cpus = config['threads']['metrics']
-    shell:
-        """
-        {params.python_exec} {params.sqanti3_script} \
-            --isoforms {input} \
-            --refGTF {params.ref_gtf} \
-            --refFasta {params.ref_fasta} \
-            --polyA_motif_list {params.polyA_motif_list} \
-            --CAGE_peak {params.cage_peak_bed} \
-            --force_id_ignore \
-            --skipORF \
-            -o data \
-            --cpus {params.cpus} \
-            -d Align/tmp/SQANTI3_QC_output \
-            --report both
-        """
+# rule eval_SQANTI3:
+#     input:
+#         "Align/tmp/mando/Isoforms.filtered.clean.gtf"
+#     output:
+#         "Align/tmp/SQANTI3_QC_output/data_SQANTI3_report.pdf"
+#     params:
+#         python_exec = config['params']['sqanti3_python'],
+#         sqanti3_script = config['params']['sqanti3_script'],
+#         ref_gtf = config['params']['mandalorion_gtf'],
+#         ref_fasta = config['params']['mandalorion_ref'],
+#         cage_peak_bed = config['params']['sqanti3_cage_peak'],
+#         polyA_motif_list = config['params']['sqanti3_polyA_motif'],
+#         cpus = config['threads']['metrics']
+#     shell:
+#         """
+#         {params.python_exec} {params.sqanti3_script} \
+#             --isoforms {input} \
+#             --refGTF {params.ref_gtf} \
+#             --refFasta {params.ref_fasta} \
+#             --polyA_motif_list {params.polyA_motif_list} \
+#             --CAGE_peak {params.cage_peak_bed} \
+#             --force_id_ignore \
+#             --skipORF \
+#             -o data \
+#             --cpus {params.cpus} \
+#             -d Align/tmp/SQANTI3_QC_output \
+#             --report both
+#         """
 
 rule report_consensus:
     input:
