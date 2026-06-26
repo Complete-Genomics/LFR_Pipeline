@@ -14,6 +14,21 @@ def count_lines():
         line_count = sum(1 for _ in f)
     return (((line_count%4)+1)%4)
 
+rule select_denovo_barcodes:
+    input:
+        "split_stat_read1.log"
+    output:
+        "denovo/filtered_barcode_freq.txt"
+    params:
+        reads_per_BC = config['frag_de_novo']['reads_per_BC']
+    shell:
+        """
+        mkdir -p denovo
+        awk -F '\\t' -v cutoff={params.reads_per_BC} \
+            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff {{print "BX:Z:" $3}}' \
+            {input} > {output}
+        """
+
 rule filter_reads1:
     input:
         barcode_freq="denovo/filtered_barcode_freq.txt",
@@ -171,7 +186,7 @@ rule correc_direction_denovo:
         adapter_seq = config['frag_de_novo']['adapter_seq'],
         src_dir = config['params']['src_dir']
     run:
-        if config['frag_denovo']['denovo_type']=='correlct_rc':
+        if config['frag_de_novo']['denovo_type'] == 'correct_rc':
             command = ["{params.python} ",
                     "{params.src_dir}/modules/clfr/denovo/denovo_supp.py ",
                         "--adapter_seq {params.adapter_seq} ",
@@ -216,3 +231,8 @@ rule filter_fasta_1k:
                     SeqIO.write(record, outfile, "fasta")
         outfile.close()
 
+rule denovo_done:
+    input:
+        "denovo/denovo.fixRC.1bc1frag.1k.fasta"
+    output:
+        touch("denovo/done.fq")

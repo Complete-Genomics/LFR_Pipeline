@@ -104,9 +104,7 @@ def run_all_input(wildcards):
                               ])
 
     if config['modules']['frag_de_novo']:
-        run_all_files.append(["data/bc_seq_hash.json",
-            "frag_de_novo/bc_list.txt",
-            "frag_de_novo/done.fq"])
+        run_all_files.extend(["denovo/done.fq"])
 
     # if config['modules']['exon2fasta'] == True:
     #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])

@@ -1,6 +1,7 @@
 # CGI LFR Pipeline
  
 This pipeline is for various CGI LFR (stLFR: Single Tube Long Fragment Read and cLFR: Complete LFR) DNA sequencing applications, with a focus on QC and assay development troubleshooting.   
+It is a refactor of the legacy CGI LFR/WGS pipeline focused on resolving technical debt, improving maintainability, and making workflow behavior easier to reproduce.  
 For production pipeline, see [cWGS](https://github.com/Complete-Genomics/DNBSEQ_Complete_WGS/tree/test?tab=readme-ov-file).  
 
 ## Background
@@ -141,4 +142,3 @@ A deep learning-based variant caller
 3. [Hapcut2](https://github.com/vibansal/HapCUT2)  
 A haplotype assembly tool
  
-
