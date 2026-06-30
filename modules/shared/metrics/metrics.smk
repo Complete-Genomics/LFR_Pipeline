@@ -14,10 +14,12 @@ rule calculate_metrics:
     benchmark:
         "Benchmarks/metrics.calculate_metrics.{id}.txt"
     shell:
-        "{params.gatk_install} CollectMultipleMetrics "
-            "-R {input.ref} "
-            "-I {input.bam} "
-            "-O Align/gatk_metrics_{wildcards.id}"
+        "gatk_cmd='{params.gatk_install}'; "
+        "if [ ! -x \"$gatk_cmd\" ]; then gatk_cmd=gatk; fi; "
+        "\"$gatk_cmd\" CollectMultipleMetrics "
+        "-R {input.ref} "
+        "-I {input.bam} "
+        "-O Align/gatk_metrics_{wildcards.id}"
 
 
 # This runs an analysis of duplicates
