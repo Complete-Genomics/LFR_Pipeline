@@ -41,7 +41,7 @@ rule calc_frag_len:
         writeouttsvs = config['calc_frag']['writeouttsvs'],
         mapping_quality = MAPPING_QUALITY,
         BC_type = config['params']['bc_condition'],
-        python = config['params']['calc_frag_python'],
+        python = config['params']['general_python'],
 
     threads:
         config['threads']['calc_frag']

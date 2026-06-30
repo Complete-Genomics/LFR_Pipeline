@@ -29,7 +29,7 @@ rule calc_frag_len:
         src_dir = config['params']['src_dir'],
         writeouttsvs = config['calc_frag']['writeouttsvs'],
         mapping_quality = MAPPING_QUALITY,
-        python = config['params']['calc_frag_python']
+        python = config['params']['general_python']
     threads:
         config['threads']['calc_frag']
     benchmark:
