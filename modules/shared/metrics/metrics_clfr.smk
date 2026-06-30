@@ -87,7 +87,8 @@ rule picard_align_metrics:
 # This looks at the coverage across the genome, as well as percent coverage at particular depths (4X, 10X, 30X)
 rule coverage_depth:
     input:
-        "Align/{}.sort.bam".format(config['samples']['id'])
+        bam = "Align/{}.sort.removedup_rm000.bam".format(config['samples']['id']),
+        bai = "Align/{}.sort.removedup_rm000.bam.bai".format(config['samples']['id'])
     output:
         "Align/coverage_depth.txt"
     params:
@@ -98,7 +99,7 @@ rule coverage_depth:
         "Benchmarks/metrics.coverage_depth.txt"
     shell:
         "{params.python} {params.src_dir}/modules/shared/metrics/coverage_depth.py "
-        "--bam {input} --ref {params.ref} --outdir Align > {output}"
+        "--bam {input.bam} --ref {params.ref} --outdir Align > {output}"
 
 
 # This is one of the plots that isn't looked at frequently but can be turned on in the config file

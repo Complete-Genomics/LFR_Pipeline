@@ -31,6 +31,11 @@ def keep_read(read, min_mapq):
 def depth_histogram(bam_path, min_mapq, min_baseq):
     hist = Counter()
     with pysam.AlignmentFile(bam_path, "rb") as bam:
+        if not bam.has_index():
+            raise SystemExit(
+                "BAM index is required for coverage depth: {}. "
+                "Run samtools index first or add the .bai file as a workflow input.".format(bam_path)
+            )
         for chrom in bam.references:
             for pileup_col in bam.pileup(
                 chrom,
