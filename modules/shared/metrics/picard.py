@@ -25,6 +25,13 @@ def parse_optional_int(pattern, line):
     return None
 
 
+def has_flag(flag_field, bit, legacy_marker):
+    try:
+        return bool(int(flag_field) & bit)
+    except ValueError:
+        return legacy_marker in flag_field
+
+
 def collect_metrics(bam, samtools):
     metrics = {
         "clean_reads": 0,
@@ -37,7 +44,7 @@ def collect_metrics(bam, samtools):
         "uniq_bases": 0,
     }
 
-    command = [samtools, "view", "-X", bam]
+    command = [samtools, "view", bam]
     with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -61,7 +68,7 @@ def collect_metrics(bam, samtools):
             metrics["clean_reads"] += 1
             metrics["clean_bases"] += sequence_length
 
-            if "u" in flag:
+            if has_flag(flag, 0x4, "u"):
                 continue
 
             aligned_bases = parse_optional_int(r"AS:i:(\d+)", line)
@@ -75,7 +82,7 @@ def collect_metrics(bam, samtools):
             metrics["mapped_reads"] += 1
             metrics["mapped_bases"] += aligned_bases
 
-            if "d" in flag:
+            if has_flag(flag, 0x400, "d"):
                 metrics["dup_reads"] += 1
 
             mismatches = parse_optional_int(r"NM:i:(\d+)", line)
