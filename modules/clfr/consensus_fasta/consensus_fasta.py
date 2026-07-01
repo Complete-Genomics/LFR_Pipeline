@@ -68,6 +68,11 @@ def env_tool(tool_name):
         return tool_path
     return tool_name
 
+def samtools_consensus_supports_ref(samtools_path):
+    result = run_capture([samtools_path, "consensus", "--help"], check=False)
+    help_text = (result.stdout or "") + (result.stderr or "")
+    return "-T" in help_text
+
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
@@ -77,6 +82,7 @@ GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.ann
 
 SAMTOOLS_PATH = env_tool("samtools")
 STRINGTIE_PATH = env_tool("stringtie")
+SAMTOOLS_CONSENSUS_HAS_REF = samtools_consensus_supports_ref(SAMTOOLS_PATH)
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
@@ -423,11 +429,12 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     SAMTOOLS_PATH,
                     "consensus",
                     "-aa",
-                    "-T", REF,
                     "-r", region,
                     "--show-ins", "yes",
                     temp_bam_path
                 ]
+                if SAMTOOLS_CONSENSUS_HAS_REF:
+                    cmd[3:3] = ["-T", REF]
                 try:
                     result = run_capture(cmd)
                     consensus_fasta = result.stdout.strip()
