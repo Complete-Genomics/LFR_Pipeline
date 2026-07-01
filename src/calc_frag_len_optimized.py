@@ -87,11 +87,11 @@ def main():
     # Process BAM file - choose method based on memory mode
     if low_memory:
         barcode_collection, stats = get_reads_low_memory(
-            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids
+            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids, args.cbc_len
         )
     else:
         barcode_collection, stats = get_reads_parallel(
-            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids
+            bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids, args.cbc_len
         )
     
     read_flag_failed, poor_quality, bc_flag_failed, mapped_flag_failed = stats
@@ -228,7 +228,22 @@ def get_arguments():
     return args
 
 
-def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids):
+def extract_barcode(read, cbc_len=None):
+    try:
+        return read.get_tag('BX')
+    except KeyError:
+        pass
+
+    query_name = read.query_name
+    if '#' not in query_name:
+        return None
+    barcode = query_name.split('#', 1)[1].split('/', 1)[0]
+    if cbc_len:
+        barcode = barcode[:cbc_len]
+    return barcode or None
+
+
+def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids, cbc_len=None):
     """
     Process a single chromosome and return fragment data.
     
@@ -259,9 +274,8 @@ def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapp
         
         for read in bamfile.fetch(chrom):
             # Get barcode
-            try:
-                bc = read.get_tag('BX')
-            except KeyError:
+            bc = extract_barcode(read, cbc_len)
+            if bc is None:
                 stats['bc_flag_failed'] += 1
                 continue
             
@@ -364,7 +378,7 @@ def process_chromosome(bam_path, chrom, split_dist, include_dups, read_len, mapp
     return results, stats
 
 
-def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids):
+def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids, cbc_len=None):
     """
     Process BAM file using multiprocessing (no Ray dependency).
     More memory efficient than Ray for this use case.
@@ -379,7 +393,7 @@ def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, map
         futures = {
             executor.submit(
                 process_chromosome, bam_path, chrom, split_dist, 
-                include_dups, read_len, mapping_quality, keep_read_ids
+                include_dups, read_len, mapping_quality, keep_read_ids, cbc_len
             ): chrom for chrom in chroms
         }
         
@@ -414,7 +428,7 @@ def get_reads_parallel(bam_path, split_dist, include_dups, chroms, read_len, map
     )
 
 
-def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids):
+def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, mapping_quality, n_threads, keep_read_ids, cbc_len=None):
     """
     Process BAM file one chromosome at a time to minimize memory usage.
     Slower but uses much less RAM.
@@ -428,7 +442,7 @@ def get_reads_low_memory(bam_path, split_dist, include_dups, chroms, read_len, m
         print(f"  [{i+1}/{len(chroms)}] Processing {chrom}...", file=sys.stderr)
         
         results, stats = process_chromosome(
-            bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids
+            bam_path, chrom, split_dist, include_dups, read_len, mapping_quality, keep_read_ids, cbc_len
         )
         
         all_results.extend(results)
