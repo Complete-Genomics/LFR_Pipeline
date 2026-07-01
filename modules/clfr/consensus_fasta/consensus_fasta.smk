@@ -10,10 +10,22 @@ rule get_chr_dict:
         "Align/samtools_idx.txt"
     shell:
         "samtools idxstats {input.bam} > {output}"
+
+rule split_consensus_bam:
+    input:
+        bam = "Align/{id}.sort.removedup_rm000.bam",
+        bai = "Align/{id}.sort.removedup_rm000.bam.bai"
+    output:
+        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
+        bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
+    shell:
+        "samtools view -bh {input.bam} {wildcards.chr} > {output.bam} && "
+        "samtools index {output.bam}"
         
 rule reformat_readid:
     input:
-        "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam"
+        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
+        bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
     output:
         "Align/tmp/{id}_{chr}.name.bam"
     params:
@@ -27,7 +39,9 @@ rule reformat_readid:
                     "--module reformat_readid",
                     "--seq_type {params.seq_type} ",
                     "--umi_len {params.umi_len} ",
-                    "--chr_name {wildcards.chr}"] 
+                    "--chr_name {wildcards.chr}",
+                    "--input_bam {input.bam}",
+                    "--output_bam {output}"] 
         shell(" ".join(command))
 
         # "python {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py --module reformat_readid --chr_name {wildcards.chr}"
@@ -215,5 +229,4 @@ rule report_consensus:
 #         "Align/{id}.sort.removedup_rm000.bam.bai"
 #     run:
 #         shell("samtools index {input}")
-
 

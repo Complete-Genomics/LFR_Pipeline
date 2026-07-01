@@ -16,15 +16,22 @@ parser.add_argument("--chr_name", type=str, required=False)
 parser.add_argument("--module", type=str, required=False)
 parser.add_argument("--seq_type", type=str, required=False)
 parser.add_argument("--umi_len", type=int, required=True)
+parser.add_argument("--input_bam", type=str, required=False)
+parser.add_argument("--output_bam", type=str, required=False)
 args = parser.parse_args()
 module = args.module
 chr_name = args.chr_name
 seq_type = args.seq_type
 BC_LEN = args.umi_len
 
-def reformat_readid(chr_name, seq_type):
-    samfile = pysam.AlignmentFile(f"Make_Vcf/step3_hapcut/step1_modify_bam/data_sort.markdup_{chr_name}.bam", "rb")
-    outfile = pysam.AlignmentFile(f"Align/tmp/data_{chr_name}.name.bam", "wb", template=samfile)
+def reformat_readid(chr_name, seq_type, input_bam, output_bam):
+    if input_bam is None:
+        input_bam = f"Make_Vcf/step3_hapcut/step1_modify_bam/data_sort.markdup_{chr_name}.bam"
+    if output_bam is None:
+        output_bam = f"Align/tmp/data_{chr_name}.name.bam"
+
+    samfile = pysam.AlignmentFile(input_bam, "rb")
+    outfile = pysam.AlignmentFile(output_bam, "wb", template=samfile)
     
     for read in samfile:
         readid = read.query_name
@@ -156,7 +163,7 @@ def compareN(input_fasta, output_pdf):
 
 if __name__ == "__main__":
     if module == 'reformat_readid':
-        reformat_readid(chr_name, seq_type)
+        reformat_readid(chr_name, seq_type, args.input_bam, args.output_bam)
     elif module == 'fix_fasta':
         fix_fasta()
     elif module == 'compareN':
