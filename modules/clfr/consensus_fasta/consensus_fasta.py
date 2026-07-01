@@ -13,6 +13,25 @@ import shutil
 import glob
 import itertools
 import argparse
+
+
+def run_capture(cmd, check=True, text=True):
+    kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "check": check,
+    }
+    if text:
+        kwargs["universal_newlines"] = True
+    return subprocess.run(cmd, **kwargs)
+
+
+def format_stderr(stderr):
+    if isinstance(stderr, bytes):
+        return stderr.decode()
+    return stderr or ""
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--bam", type=str, required=False)
 parser.add_argument("--ref_fasta", type=str, required=False)
@@ -43,6 +62,12 @@ def get_data_tools_root(ref_path):
         raise ValueError(f"Cannot derive Data_and_Tools root from reference path: {ref_path}")
     return ref_path.split(marker, 1)[0] + "/Data_and_Tools"
 
+def env_tool(tool_name):
+    tool_path = os.path.join(os.path.dirname(sys.executable), tool_name)
+    if os.path.exists(tool_path):
+        return tool_path
+    return tool_name
+
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
@@ -50,8 +75,8 @@ REF = reference_fasta_file
 DATA_TOOLS_ROOT = get_data_tools_root(REF)
 GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
 
-SAMTOOLS_PATH = "samtools"
-STRINGTIE_PATH = "stringtie"
+SAMTOOLS_PATH = env_tool("samtools")
+STRINGTIE_PATH = env_tool("stringtie")
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
@@ -59,9 +84,22 @@ TEMP_BASE_DIR = "/dev/shm"
 TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
 FALLBACK_TEMP_DIR = "/tmp"
 
-subprocess.call(f'mkdir -p /dev/shm/consensus', shell=True)
-TEMP_DIR = f"/dev/shm/consensus/{BATCH_ID}/{chrom}_{split_index}" if BATCH_ID else f"/dev/shm/consensus/{chrom}_{split_index}"
-subprocess.call(f'mkdir -p {TEMP_DIR}', shell=True)
+def make_temp_dir(chrom, split_index, batch_id):
+    for base_dir in ("/dev/shm/consensus", os.path.join(tempfile.gettempdir(), "consensus")):
+        temp_dir = (
+            os.path.join(base_dir, batch_id, f"{chrom}_{split_index}")
+            if batch_id else os.path.join(base_dir, f"{chrom}_{split_index}")
+        )
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=temp_dir, delete=True):
+                pass
+            return temp_dir
+        except OSError as error:
+            sys.stderr.write(f"WARNING: Could not use temp directory {temp_dir}: {error}\n")
+    raise OSError("No writable temporary directory available for consensus generation")
+
+TEMP_DIR = make_temp_dir(chrom, split_index, BATCH_ID)
 current_temp_dir = TEMP_DIR
 
 # --- Global variable for FASTA reference ---
@@ -116,9 +154,9 @@ def initialize_fasta_ref(ref_path):
         if not os.path.exists(f"{ref_path}.fai"):
             sys.stderr.write(f"WARNING: Reference FASTA file {ref_path} does not have a .fai index. Creating one now...\n")
             try:
-                subprocess.run([SAMTOOLS_PATH, "faidx", ref_path], check=True, capture_output=True)
+                run_capture([SAMTOOLS_PATH, "faidx", ref_path])
             except subprocess.CalledProcessError as e:
-                sys.stderr.write(f"ERROR: Failed to create FASTA index for {ref_path}: {e.stderr.decode()}\n")
+                sys.stderr.write(f"ERROR: Failed to create FASTA index for {ref_path}: {format_stderr(e.stderr)}\n")
                 raise
         _fasta_ref_file = pysam.FastaFile(ref_path)
 
@@ -165,7 +203,7 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
 
     ]
     try:
-        result = subprocess.run(stringtie_cmd, capture_output=True, text=True, check=True)
+        result = run_capture(stringtie_cmd)
         # gtf_lines = result.stdout.strip().split("\n")
         with open(temp_gtf_path, 'r') as gtf_file:
             gtf_lines = gtf_file.read().strip().split("\n")
@@ -345,9 +383,9 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         else:
             # Index the temp BAM file
             try:
-                subprocess.run([SAMTOOLS_PATH, "index", temp_bam_path], check=True, capture_output=True)
+                run_capture([SAMTOOLS_PATH, "index", temp_bam_path])
             except subprocess.CalledProcessError as e:
-                sys.stderr.write(f"ERROR: Failed to index temporary BAM {temp_bam_path} for UMI {umi_id}: {e.stderr.decode()}\n")
+                sys.stderr.write(f"ERROR: Failed to index temporary BAM {temp_bam_path} for UMI {umi_id}: {format_stderr(e.stderr)}\n")
                 return None
 
 
@@ -391,12 +429,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     temp_bam_path
                 ]
                 try:
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
+                    result = run_capture(cmd)
                     consensus_fasta = result.stdout.strip()
                     consensus_lines = consensus_fasta.split("\n")
                     if len(consensus_lines) < 2:
