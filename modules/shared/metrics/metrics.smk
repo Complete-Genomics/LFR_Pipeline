@@ -3,7 +3,7 @@
 # insert size and alignment metrics
 rule calculate_metrics:
     input:
-        bam = "keep/Align/{id}.sort.bam",
+        bam = "keep/Align/{id}.sort.markdup.bam",
         ref = REF
     output:
         aln_sum = "Align/gatk_metrics_{id}.alignment_summary_metrics",
@@ -25,7 +25,7 @@ rule calculate_metrics:
 # This runs an analysis of duplicates
 rule duplicate_analysis:
     input:
-        "Align/{}.sort.markdup.bam".format(config['samples']['id'])
+        "keep/Align/{}.sort.markdup.bam".format(config['samples']['id'])
     output:
         "Align/Duplicate_Analysis/dup_info",
         "Align/Duplicate_Analysis/duplicate_rate",
