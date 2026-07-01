@@ -37,14 +37,21 @@ MIN_READS = args.min_reads
 DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
 
+def get_data_tools_root(ref_path):
+    marker = "/Data_and_Tools/"
+    if marker not in ref_path:
+        raise ValueError(f"Cannot derive Data_and_Tools root from reference path: {ref_path}")
+    return ref_path.split(marker, 1)[0] + "/Data_and_Tools"
+
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
 REF = reference_fasta_file
-GTF='/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf'
+DATA_TOOLS_ROOT = get_data_tools_root(REF)
+GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
 
-SAMTOOLS_PATH = "/home/ycai/anaconda3/envs/samtools122/bin/samtools"
-STRINGTIE_PATH = "/home/ycai/anaconda3/envs/my_py311_env/bin/stringtie"
+SAMTOOLS_PATH = "samtools"
+STRINGTIE_PATH = "stringtie"
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
