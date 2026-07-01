@@ -40,12 +40,11 @@ BATCH_ID = args.batch_id
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
-REF='/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.ercc.fa'
+REF = reference_fasta_file
 GTF='/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf'
 
 SAMTOOLS_PATH = "/home/ycai/anaconda3/envs/samtools122/bin/samtools"
 STRINGTIE_PATH = "/home/ycai/anaconda3/envs/my_py311_env/bin/stringtie"
-REF = "/home/ycai/branch/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.ercc.fa"
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
@@ -57,8 +56,6 @@ subprocess.call(f'mkdir -p /dev/shm/consensus', shell=True)
 TEMP_DIR = f"/dev/shm/consensus/{BATCH_ID}/{chrom}_{split_index}" if BATCH_ID else f"/dev/shm/consensus/{chrom}_{split_index}"
 subprocess.call(f'mkdir -p {TEMP_DIR}', shell=True)
 current_temp_dir = TEMP_DIR
-
-_fasta_ref_file = pysam.FastaFile(REF)
 
 # --- Global variable for FASTA reference ---
 _fasta_ref_file = None
