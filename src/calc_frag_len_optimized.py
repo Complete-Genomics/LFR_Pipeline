@@ -113,6 +113,12 @@ def main():
             pickle.dump(sample_df, fp, protocol=4)
     except Exception as e:
         print(f"Warning: Could not save barcode_collection sample: {e}", file=sys.stderr)
+
+    preview_df = barcode_collection.iloc[:100].copy()
+    if 'ReadID' in preview_df.columns:
+        preview_df = preview_df.drop('ReadID', axis=1)
+    with open(f'{dirname}/barcode_collection', 'wb') as fp:
+        pickle.dump(preview_df, fp, protocol=4)
     
     # Write out barcodes summary prior to any filtering
     raw_reads_per_bc_bins, barcode_summary = write_out_barcode_summary(

@@ -82,13 +82,6 @@ def reads_notIn_frag(dirname, barcode_collection, min_reads, min_frag, max_frag)
                     file = frag_stats)
         except Exception as e: print('reads not in frag failed') 
     
-    ## long frag
-    df = barcode_collection[barcode_collection.Chrom =='chr22']
-    df = df[(df.N_Reads >= 20) & (df.Frag_Length >= 50000)]
-    bed_df = df[['Chrom', 'Min_Pos', 'Max_Pos', 'Barcode', 'N_Reads', 'Frag_Length', 'Positions']]
-    output_file = f'{dirname}/long_frag.bed'
-    bed_df.to_csv(output_file, sep='\t', index=False, header=False)
-
     ## reads not in frag table
     df = barcode_collection
     test_barcodes = df[(df.N_Reads < min_reads) | (df.Frag_Length < min_frag)]
@@ -234,6 +227,11 @@ def manipulate_df_gaps(test_barcodes, min_frag, max_frag, min_reads, read_len):
 
 
 def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads, plot_cutoff):
+    # Write a small preview artifact for Snakemake/downstream checks without
+    # materializing the full fragment dataframe.
+    columns = ['Chrom', 'Positions', 'Frag_Length', 'Cigar_match', 'Barcode', 'N_Reads']
+    df = test_barcodes.reindex(columns=columns).head(100)
+    df.to_csv(f"{dirname}/frag_and_bc_dataframe.tsv", sep='\t', index=False)
 
     try:
         unique_barcode_count  = test_barcodes['Barcode'].nunique()
@@ -305,13 +303,6 @@ def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads,
         apart_dist = 1000000
         frag_sameBC_apart(apart_dist, test_barcodes)
     except Exception as e: print('frag_sameBC_apart failed') 
-
-    # write out full dataframe as tsv
-    write_out_tsv = True
-    if write_out_tsv:
-        df = test_barcodes[['Chrom', 'Positions','Frag_Length', 'Cigar_match', 'Barcode', 'N_Reads']]
-        df = df[df['Chrom']=='chr22']
-        df.to_csv( f"{dirname}/frag_and_bc_dataframe.tsv", sep='\t', index=False)
 
 def write_out_tsv_and_summary2(test_barcodes, dirname, reads_per_bc_bins, write_out_tsv, min_reads):
     try:
