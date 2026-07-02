@@ -98,7 +98,7 @@ params:
     general_python: "/path/to/python"
     tabix: "/opt/cgi-tools/bin/tabix"
     hapcut2: "/path/to/hapcut2/bin"
-
+    samtools: "/path/to/hapcut2/bin/samtools"
     bcftools: "/opt/cgi-tools/bin/bcftools"
     hapcut_link_dist: 100000
     wenlan_python: "/opt/cgi-anaconda2-4.4.0/bin/python"

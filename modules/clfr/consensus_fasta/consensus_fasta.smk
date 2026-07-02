@@ -8,8 +8,10 @@ rule get_chr_dict:
         bai="Align/{}.sort.removedup_rm000.bam.bai".format(config['samples']['id'])
     output:
         "Align/samtools_idx.txt"
+    params:
+        samtools = config['params'].get('samtools', 'samtools')
     shell:
-        "samtools idxstats {input.bam} > {output}"
+        "{params.samtools} idxstats {input.bam} > {output}"
 
 rule split_consensus_bam:
     input:
@@ -18,9 +20,11 @@ rule split_consensus_bam:
     output:
         bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
         bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
+    params:
+        samtools = config['params'].get('samtools', 'samtools')
     shell:
-        "samtools view -bh {input.bam} {wildcards.chr} > {output.bam} && "
-        "samtools index {output.bam}"
+        "{params.samtools} view -bh {input.bam} {wildcards.chr} > {output.bam} && "
+        "{params.samtools} index {output.bam}"
         
 rule reformat_readid:
     input:
@@ -51,8 +55,10 @@ rule sort_reformated_bam:
         "Align/tmp/{id}_{chr}.name.bam"
     output:
         "Align/tmp/{id}_{chr}.name.sort.bam"
+    params:
+        samtools = config['params'].get('samtools', 'samtools')
     shell:
-        "samtools sort -@ 2 -n -o {output} {input} "
+        "{params.samtools} sort -@ 2 -n -o {output} {input} "
 
 # samtools sort -n -o Align/${chr}.name.sort.bam Align/${chr}.name.bam
 
@@ -68,6 +74,7 @@ rule get_consensus_fasta:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'], 
         ref = config['params']['ref_fa'],
+        samtools = config['params'].get('samtools', 'samtools'),
         min_reads = config['frag_de_novo']['reads_per_BC']
     run:
         command = ["{params.python}",
@@ -78,7 +85,8 @@ rule get_consensus_fasta:
                     "--chrom {wildcards.chr}",
                     "--dict_file {input.chr_dict}",
                     "--split_index {wildcards.split_idx}",
-                    "--min_reads {params.min_reads}"
+                    "--min_reads {params.min_reads}",
+                    "--samtools {params.samtools}"
                     ] 
         shell(" ".join(command))
 
@@ -229,4 +237,3 @@ rule report_consensus:
 #         "Align/{id}.sort.removedup_rm000.bam.bai"
 #     run:
 #         shell("samtools index {input}")
-

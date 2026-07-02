@@ -43,6 +43,7 @@ parser.add_argument("--split_index", type=int, required=False)
 parser.add_argument("--min_reads", type=int, required=False)
 parser.add_argument("--downsample_ratio", type=float, default=1.0, required=False)
 parser.add_argument("--batch_id", type=str, default="", required=False)
+parser.add_argument("--samtools", type=str, default=None, required=False)
 
 args = parser.parse_args()
 input_bam_file = args.bam
@@ -55,6 +56,7 @@ dict_file = args.dict_file
 MIN_READS = args.min_reads
 DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
+SAMTOOLS_ARG = args.samtools
 
 def get_data_tools_root(ref_path):
     marker = "/Data_and_Tools/"
@@ -80,7 +82,7 @@ REF = reference_fasta_file
 DATA_TOOLS_ROOT = get_data_tools_root(REF)
 GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
 
-SAMTOOLS_PATH = env_tool("samtools")
+SAMTOOLS_PATH = SAMTOOLS_ARG or env_tool("samtools")
 STRINGTIE_PATH = env_tool("stringtie")
 SAMTOOLS_CONSENSUS_HAS_REF = samtools_consensus_supports_ref(SAMTOOLS_PATH)
 
