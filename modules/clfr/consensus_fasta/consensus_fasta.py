@@ -75,6 +75,17 @@ def samtools_consensus_supports_ref(samtools_path):
     help_text = (result.stdout or "") + (result.stderr or "")
     return "-T" in help_text
 
+def log_samtools_runtime(samtools_path, consensus_has_ref):
+    result = run_capture([samtools_path, "--version"], check=False)
+    version_line = ((result.stdout or "") + (result.stderr or "")).splitlines()
+    version_line = version_line[0] if version_line else "unknown version"
+    sys.stderr.write(f"Using samtools: {samtools_path}\n")
+    sys.stderr.write(f"Samtools version: {version_line}\n")
+    sys.stderr.write(
+        "Samtools consensus uses -T reference: %s\n" %
+        ("yes" if consensus_has_ref else "no")
+    )
+
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
@@ -85,6 +96,7 @@ GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.ann
 SAMTOOLS_PATH = SAMTOOLS_ARG or env_tool("samtools")
 STRINGTIE_PATH = env_tool("stringtie")
 SAMTOOLS_CONSENSUS_HAS_REF = samtools_consensus_supports_ref(SAMTOOLS_PATH)
+log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF)
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
