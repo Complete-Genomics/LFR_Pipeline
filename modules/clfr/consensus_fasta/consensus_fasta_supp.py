@@ -47,23 +47,12 @@ def reformat_readid(chr_name, seq_type, input_bam, output_bam):
     outfile.close()
     return 
 
-def fix_fasta():
-    # original_file = r"Align/test1.noN.fasta"
-    # corrected_file = r"Align/test1.noN.fix.fasta"
-    # with open(original_file) as original, open(corrected_file, 'w') as corrected:
-    #     records = SeqIO.parse(original_file, 'fasta')
-    # for record in records:
-    #     # if record.id == 'AAAATCTTATGGGGT_chr1':
-    #     record.seq = str(record.seq)
-    # SeqIO.write(record, corrected, 'fasta')
-    
-    corrected_file = f"Align/tmp/data_{chr_name}.noN.fix.fasta"
-    with open(f"Align/tmp/data_{chr_name}.fasta", "rt") as handle, open(corrected_file, 'w') as corrected:
+def fix_fasta(input_fasta, output_fasta):
+
+    with open(input_fasta, "rt") as handle, open(output_fasta, 'w') as corrected:
         for record in SeqIO.parse(handle, "fasta"):
-            new_seq =str(record.seq)
+            new_seq = str(record.seq).replace("N", "").replace("n", "")
             if len(new_seq)>0:
-                # seq = str(record.seq).replace('\n', '')
-                # print(len(record.seq))
                 corrected.write('>'+record.id+'\n')
                 corrected.write(new_seq+'\n')
 
