@@ -32,8 +32,8 @@ rule map_reads_minimap:
         #log=Align/minimap2.log
         #tmp_prefix=/dev/shm/minimap_tmp
         
-        mkdir -p /dev/shm/minimap_tmp
-        mkdir -p /dev/shm/minimap_tmp/sort_tmp
+        SORT_TMP=/dev/shm/minimap_tmp_$$
+        mkdir -p $SORT_TMP
 
 
         # ============ 2. minimap2 mapping ============
@@ -46,7 +46,7 @@ rule map_reads_minimap:
             2>> minimap.log \
         | samtools view -@ 4 -b - \
         | samtools sort -@ 16 -m 2G \
-            -T /dev/shm/minimap_tmp/sort_tmp \
+            -T $SORT_TMP/sort \
             -o {output.bam} - \
             2>> minimap.log
 
@@ -54,9 +54,8 @@ rule map_reads_minimap:
         samtools index -@ 8 {output.bam} {output.bai} 2>> minimap.log
 
         # ============ 4. clean up ============
-        rm -rf /dev/shm/minimap_tmp
+        rm -rf $SORT_TMP
 
         """
-
 
 
