@@ -45,6 +45,8 @@ params:
     ########### start fill ###
     downsample_ratio: 1.0
     batch_id: ""
+    # Pass -T ref.fa to samtools consensus. Disabled by default because it can be slow.
+    use_samtools_reference: False
     correct_rc: True
     # map mrna library to genome: 'star' (gDNA uses BWA), 'minimap2'
     mrna_mapper: 'star'

@@ -44,6 +44,7 @@ parser.add_argument("--min_reads", type=int, required=False)
 parser.add_argument("--downsample_ratio", type=float, default=1.0, required=False)
 parser.add_argument("--batch_id", type=str, default="", required=False)
 parser.add_argument("--samtools", type=str, default=None, required=False)
+parser.add_argument("--use_samtools_reference", action="store_true")
 
 args = parser.parse_args()
 input_bam_file = args.bam
@@ -57,6 +58,7 @@ MIN_READS = args.min_reads
 DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
 SAMTOOLS_ARG = args.samtools
+USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
 
 def get_data_tools_root(ref_path):
     marker = "/Data_and_Tools/"
@@ -75,15 +77,19 @@ def samtools_consensus_supports_ref(samtools_path):
     help_text = (result.stdout or "") + (result.stderr or "")
     return "-T" in help_text
 
-def log_samtools_runtime(samtools_path, consensus_has_ref):
+def log_samtools_runtime(samtools_path, consensus_has_ref, use_reference):
     result = run_capture([samtools_path, "--version"], check=False)
     version_line = ((result.stdout or "") + (result.stderr or "")).splitlines()
     version_line = version_line[0] if version_line else "unknown version"
     sys.stderr.write(f"Using samtools: {samtools_path}\n")
     sys.stderr.write(f"Samtools version: {version_line}\n")
     sys.stderr.write(
-        "Samtools consensus uses -T reference: %s\n" %
+        "Samtools consensus supports -T reference: %s\n" %
         ("yes" if consensus_has_ref else "no")
+    )
+    sys.stderr.write(
+        "Samtools consensus uses -T reference: %s\n" %
+        ("yes" if use_reference else "no")
     )
 
 # --- Configuration ---
@@ -96,7 +102,10 @@ GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.ann
 SAMTOOLS_PATH = SAMTOOLS_ARG or env_tool("samtools")
 STRINGTIE_PATH = env_tool("stringtie")
 SAMTOOLS_CONSENSUS_HAS_REF = samtools_consensus_supports_ref(SAMTOOLS_PATH)
-log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF)
+SAMTOOLS_CONSENSUS_USES_REF = USE_SAMTOOLS_REFERENCE and SAMTOOLS_CONSENSUS_HAS_REF
+if USE_SAMTOOLS_REFERENCE and not SAMTOOLS_CONSENSUS_HAS_REF:
+    sys.stderr.write("WARNING: --use_samtools_reference was requested, but this samtools consensus does not support -T.\n")
+log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENSUS_USES_REF)
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
@@ -447,7 +456,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     "--show-ins", "yes",
                     temp_bam_path
                 ]
-                if SAMTOOLS_CONSENSUS_HAS_REF:
+                if SAMTOOLS_CONSENSUS_USES_REF:
                     cmd[3:3] = ["-T", REF]
                 try:
                     result = run_capture(cmd)

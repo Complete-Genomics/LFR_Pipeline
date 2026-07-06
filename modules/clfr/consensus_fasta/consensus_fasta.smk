@@ -2,6 +2,10 @@
 part of clfr workflow, get (transcriptome) fasta
 '''
 NUM_SPLITS_CONSENSUS=5
+wildcard_constraints:
+    split_idx = r"\d+",
+    i = r"\d+"
+
 rule get_chr_dict:
     input:
         bam="Align/{}.sort.removedup_rm000.bam".format(config['samples']['id']),
@@ -75,7 +79,8 @@ rule get_consensus_fasta:
         src_dir = config['params']['src_dir'], 
         ref = config['params']['ref_fa'],
         samtools = config['params'].get('samtools', 'samtools'),
-        min_reads = config['frag_de_novo']['reads_per_BC']
+        min_reads = config['frag_de_novo']['reads_per_BC'],
+        use_samtools_reference = config['params'].get('use_samtools_reference', False)
     run:
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta.py",
@@ -88,6 +93,8 @@ rule get_consensus_fasta:
                     "--min_reads {params.min_reads}",
                     "--samtools {params.samtools}"
                     ] 
+        if params.use_samtools_reference:
+            command.append("--use_samtools_reference")
         shell(" ".join(command))
 
 
@@ -228,24 +235,3 @@ rule report_consensus:
         "Align/consensus/consensus.fixRC_SQANTI3_report.pdf"
     run:
         shell("cp {input} {output} ")
-
-# rule split_hapcut_bam:
-#     input:
-#         bam="Align/{id}.sort.removedup_rm000.bam",
-#         bai="Align/{id}.sort.removedup_rm000.bam.bai"
-#     output:
-#         "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam"
-#     params:
-#         id = config['samples']['id']
-#     shell:
-#         "samtools view -bh {input.bam} {wildcards.chr} > "
-#             "{output} && "
-#             "samtools index {output}"
-
-# rule index_bam_consensus:
-#     input:
-#         "Align/{id}.sort.removedup_rm000.bam"
-#     output:
-#         "Align/{id}.sort.removedup_rm000.bam.bai"
-#     run:
-#         shell("samtools index {input}")
