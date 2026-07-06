@@ -15,11 +15,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--chr_name", type=str, required=False)
 parser.add_argument("--module", type=str, required=False)
 parser.add_argument("--seq_type", type=str, required=False)
-parser.add_argument("--umi_len", type=int, required=False)
+parser.add_argument("--umi_len", type=int, required=True)
 parser.add_argument("--input_bam", type=str, required=False)
 parser.add_argument("--output_bam", type=str, required=False)
-parser.add_argument("--input_fasta", type=str, required=False)
-parser.add_argument("--output_fasta", type=str, required=False)
 args = parser.parse_args()
 module = args.module
 chr_name = args.chr_name
@@ -27,8 +25,6 @@ seq_type = args.seq_type
 BC_LEN = args.umi_len
 
 def reformat_readid(chr_name, seq_type, input_bam, output_bam):
-    if BC_LEN is None:
-        raise ValueError("--umi_len is required for --module reformat_readid")
     if input_bam is None:
         input_bam = f"Make_Vcf/step3_hapcut/step1_modify_bam/data_sort.markdup_{chr_name}.bam"
     if output_bam is None:
@@ -51,16 +47,23 @@ def reformat_readid(chr_name, seq_type, input_bam, output_bam):
     outfile.close()
     return 
 
-def fix_fasta(input_fasta, output_fasta):
-    if input_fasta is None:
-        input_fasta = f"Align/tmp/data_{chr_name}.fasta"
-    if output_fasta is None:
-        output_fasta = f"Align/tmp/data_{chr_name}.noN.fix.fasta"
-
-    with open(input_fasta, "rt") as handle, open(output_fasta, 'w') as corrected:
+def fix_fasta():
+    # original_file = r"Align/test1.noN.fasta"
+    # corrected_file = r"Align/test1.noN.fix.fasta"
+    # with open(original_file) as original, open(corrected_file, 'w') as corrected:
+    #     records = SeqIO.parse(original_file, 'fasta')
+    # for record in records:
+    #     # if record.id == 'AAAATCTTATGGGGT_chr1':
+    #     record.seq = str(record.seq)
+    # SeqIO.write(record, corrected, 'fasta')
+    
+    corrected_file = f"Align/tmp/data_{chr_name}.noN.fix.fasta"
+    with open(f"Align/tmp/data_{chr_name}.fasta", "rt") as handle, open(corrected_file, 'w') as corrected:
         for record in SeqIO.parse(handle, "fasta"):
-            new_seq = str(record.seq).replace("N", "").replace("n", "")
+            new_seq =str(record.seq)
             if len(new_seq)>0:
+                # seq = str(record.seq).replace('\n', '')
+                # print(len(record.seq))
                 corrected.write('>'+record.id+'\n')
                 corrected.write(new_seq+'\n')
 
@@ -162,7 +165,7 @@ if __name__ == "__main__":
     if module == 'reformat_readid':
         reformat_readid(chr_name, seq_type, args.input_bam, args.output_bam)
     elif module == 'fix_fasta':
-        fix_fasta(args.input_fasta, args.output_fasta)
+        fix_fasta()
     elif module == 'compareN':
         input_fasta = 'down10/Align/consensus/consensus.fixRC.fasta'
         output_pdf = 'down10/Align/consensus/consensus.fixRC.fasta.N.pdf'
