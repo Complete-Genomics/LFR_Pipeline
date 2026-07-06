@@ -90,12 +90,24 @@ rule get_consensus_fasta:
                     ] 
         shell(" ".join(command))
 
+rule fix_consensus_format:
+    input:
+        "Align/tmp/{chr}/{id}_{chr}_{i}.fasta"
+    output:
+        "Align/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir']
+    shell:
+        "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py "
+        "--module fix_fasta --input_fasta {input} --output_fasta {output}"
+
 
 split_cnt = list(range(NUM_SPLITS_CONSENSUS))  # [0, 1, 2, ..., 19]
 
 rule merge_consensus_fasta:
     input:
-        fa = expand("Align/tmp/{chr}/{id}_{chr}_{i}.fasta", id=config['samples']['id'],chr=CHROMS, i=split_cnt),
+        fa = expand("Align/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta", id=config['samples']['id'],chr=CHROMS, i=split_cnt),
     output:
         "Align/consensus/consensus.fasta"
     shell:
