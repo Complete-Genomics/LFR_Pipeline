@@ -15,9 +15,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--chr_name", type=str, required=False)
 parser.add_argument("--module", type=str, required=False)
 parser.add_argument("--seq_type", type=str, required=False)
-parser.add_argument("--umi_len", type=int, required=True)
+parser.add_argument("--umi_len", type=int, required=False)
 parser.add_argument("--input_bam", type=str, required=False)
 parser.add_argument("--output_bam", type=str, required=False)
+parser.add_argument("--input_fasta", type=str, required=False)
+parser.add_argument("--output_fasta", type=str, required=False)
 args = parser.parse_args()
 module = args.module
 chr_name = args.chr_name
@@ -154,7 +156,7 @@ if __name__ == "__main__":
     if module == 'reformat_readid':
         reformat_readid(chr_name, seq_type, args.input_bam, args.output_bam)
     elif module == 'fix_fasta':
-        fix_fasta()
+        fix_fasta(args.input_fasta, args.output_fasta)
     elif module == 'compareN':
         input_fasta = 'down10/Align/consensus/consensus.fixRC.fasta'
         output_pdf = 'down10/Align/consensus/consensus.fixRC.fasta.N.pdf'
