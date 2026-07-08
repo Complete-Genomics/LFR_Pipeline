@@ -106,6 +106,7 @@ SAMTOOLS_CONSENSUS_USES_REF = USE_SAMTOOLS_REFERENCE and SAMTOOLS_CONSENSUS_HAS_
 if USE_SAMTOOLS_REFERENCE and not SAMTOOLS_CONSENSUS_HAS_REF:
     sys.stderr.write("WARNING: --use_samtools_reference was requested, but this samtools consensus does not support -T.\n")
 log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENSUS_USES_REF)
+EMPTY_CONSENSUS_COUNT = 0
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
@@ -135,7 +136,6 @@ current_temp_dir = TEMP_DIR
 _fasta_ref_file = None
 
 def get_idx(dict_file, split_index, chrom):
-    chr_dict = {}
     with open(dict_file, 'r') as f:
         for line in f:
             fields = line.split('\t')
@@ -145,8 +145,8 @@ def get_idx(dict_file, split_index, chrom):
                 chunk = mapped_reads//5
                 start_index = split_index*chunk+1
                 end_index = (split_index+1)*chunk
-
-    return start_index, end_index
+                return start_index, end_index
+    raise ValueError(f"Chromosome '{chrom}' was not found in idxstats file '{dict_file}'.")
 
 start_index, end_index  = get_idx(dict_file, split_index, chrom)
 
@@ -368,6 +368,7 @@ def get_2bp_sequence_pysam(chrom, start, end):
 
 def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
     """Process a UMI group's reads to generate a consensus sequence."""
+    global EMPTY_CONSENSUS_COUNT
     
     if not reads_list_obj:
         sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no reads data, skipping.\n")
@@ -463,7 +464,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     consensus_fasta = result.stdout.strip()
                     consensus_lines = consensus_fasta.split("\n")
                     if len(consensus_lines) < 2:
-                        sys.stderr.write(f"WARNING: Samtools consensus output for UMI {umi_id} is empty or invalid (region {region}).\n")
+                        EMPTY_CONSENSUS_COUNT += 1
                         continue
                     consensus_seq_core = "".join(consensus_lines[1:])
                     
@@ -572,6 +573,10 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
         except Exception as e:
             sys.stderr.write(f"Error closing input BAM file: {e}\n")
 
+    if EMPTY_CONSENSUS_COUNT:
+        sys.stderr.write(
+            f"Skipped {EMPTY_CONSENSUS_COUNT} regions with empty or invalid samtools consensus output.\n"
+        )
     sys.stderr.write(f"Processing complete. All consensus sequences written to '{output_fasta_file}'.\n")
 
     # Clean up the specific temporary directory created by this run
