@@ -28,7 +28,7 @@ rule split_reads_BCgDNA:
     run:
         if config['params']['bc_condition'] == 'BCgDNA':
             params.barcode = determine_barcode_list(400000)
-            shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+            shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                     "--barcode {params.barcode} "
                     "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                     "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "

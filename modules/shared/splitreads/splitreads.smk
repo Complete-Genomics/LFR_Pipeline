@@ -237,7 +237,7 @@ rule split_reads:
     run:
         if config['modules']['BCsplit']==True:
             if config['params']['bc_condition'] == 'random_bc_umi_rc':
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                 "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                 "--cbc_len {params.cbc_len} --bc_len_redundant {params.bc_len_redundant} "
                 "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -246,7 +246,7 @@ rule split_reads:
                 "--additional_bc_len_r1 {params.additional_bc_len_r1} --reverse_complement --threads {threads} "
                 "2> data/split_stat_read.err")
             elif config['params']['bc_condition'] == 'random_bc':
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                 "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                 "--cbc_len {params.cbc_len} --bc_len_redundant {params.bc_len_redundant} "
                 "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -266,7 +266,7 @@ rule split_reads:
                 if params.bc_len != 42:
                     raise ValueError("Only 42 bp stLFR barcodes are supported; bc_len == 30 is retired.")
                 params.barcode = determine_barcode_list(400000)
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                     "--barcode {params.barcode} "
                     "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                     "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -276,7 +276,7 @@ rule split_reads:
                     "2> data/split_stat_read.err")
             elif config['params']['bc_condition'] == 'BCgDNA':
                 params.barcode = determine_barcode_list(400000)
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                         "--barcode {params.barcode} "
                         "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                         "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -286,7 +286,7 @@ rule split_reads:
                         "2> data/split_stat_read.err")
             elif config['params']['bc_condition'].lower() == 'standard_ac_swap':
                 params.barcode = determine_barcode_list(400000)
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                         "--barcode {params.barcode} "
                         "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                         "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -296,7 +296,7 @@ rule split_reads:
                         "2> data/split_stat_read.err")
             elif config['params']['bc_condition'].lower() == 'standard_gc_swap':
                 params.barcode = determine_barcode_list(400000)
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_stLFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
                         "--barcode {params.barcode} "
                         "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                         "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
