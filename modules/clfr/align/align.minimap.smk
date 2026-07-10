@@ -33,6 +33,7 @@ rule map_reads_minimap:
         #tmp_prefix=/dev/shm/minimap_tmp
         
         SORT_TMP=/dev/shm/minimap_tmp_$$
+        echo "minimap2 samtools sort tmp: $SORT_TMP" >&2
         mkdir -p $SORT_TMP
 
 
