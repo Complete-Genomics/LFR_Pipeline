@@ -46,7 +46,7 @@ rule map_reads_minimap:
             {input.ref} {input.fq2} \
             2>> minimap.log \
         | samtools view -@ 4 -b - \
-        | samtools sort -@ 16 -m 2G \
+        | samtools sort -@ 10 -m 2G \
             -T $SORT_TMP/sort \
             -o {output.bam} - \
             2>> minimap.log
