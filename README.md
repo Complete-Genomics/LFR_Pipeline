@@ -128,10 +128,33 @@ flowchart TD
     class exon,frag,consensus,rna,denovo,vc,bench opt
 ```
 
+## Installation
+
+For server-to-server deployment, prefer an explicit conda package spec exported
+from a working server environment. This avoids solver drift from a full
+`conda env export` file, which can include low-level ABI pins that may conflict
+on another server even with the same Linux architecture.
+
+On the source server:
+
+```bash
+conda list --explicit > lfr_pipeline.explicit.txt
+```
+
+On the target server:
+
+```bash
+mamba create -n lfr_pipeline --file lfr_pipeline.explicit.txt
+mamba activate lfr_pipeline
+```
+
+For new installs where exact package reproduction is not required, use
+`config/env.yml` as the top-level dependency specification.
+
 ## Quick start
 
-1. modify config.yaml  
-2. excute run_lfr.sh  
+1. Modify `config.yaml`.
+2. Execute `run_lfr.sh`.
 
 
 ## Reference
