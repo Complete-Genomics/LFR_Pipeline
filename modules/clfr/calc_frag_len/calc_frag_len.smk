@@ -120,6 +120,7 @@ rule coverage_bias_boxplot:
         command = ["{params.python}",
                    "{params.src_dir}/modules/clfr/calc_frag_len/frag_mean_cov_boxplot.py",
                    "--name_sample {params.name_sample}",
+                   "--read_len {params.read_len}",
                    "--num_bin_in_frag {params.num_bin_in_frag}",
                    "--ylim {params.ylim}",
                    "--minreads {params.minreads}",

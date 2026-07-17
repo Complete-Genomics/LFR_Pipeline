@@ -1,8 +1,8 @@
 """
 bin fragment and calculate mean coverage, from 5' to 3' to check if higher coverage at 3' end
 flip start/end if SE, PE R1 aligned reverse
-Feature 1 (bin_num100): split each frag into 100 bins, count reads per bin as depth, boxplot
-Feature 2 (bin_size10): bin by 10bp, count reads per bin as depth, boxplot
+Feature 1 (bin_num10): split each frag into configured number of bins, count reads per bin as depth, boxplot
+Feature 2 (bin_size100): bin by 100bp, count reads per bin as depth, boxplot
 usage:
 python frag_mean_cov_boxplot.py --read_len 100 --num_bin_in_frag 100 --name_sample V350096874_L01 --dirname Calc_Frag_Length_{split} --library_type gdna --ylim 100 --minreads 50 --processNline 50000
 output: mean_cov_bin pickle files and png plots
@@ -24,7 +24,7 @@ import traceback
 parser = argparse.ArgumentParser()
 parser.add_argument("--name_sample", type=str, help="name of sample1")
 parser.add_argument("--library_type", type=str, help="gdna or mrna", default="gdna")
-parser.add_argument("--read_len", type=int, help="100")
+parser.add_argument("--read_len", type=int, required=True, help="100")
 parser.add_argument("--num_bin_in_frag", type=int, default=100, help="100")
 parser.add_argument("--dirname", type=str, help="Calc_Frag_Length_{split}")
 parser.add_argument("--ylim", type=int, help="100")
@@ -259,8 +259,8 @@ def main():
     bin_frag_by = 100
 
     # Create output directories
-    os.makedirs(dirname + '/bin_num100', exist_ok=True)
-    os.makedirs(dirname + '/bin_size10', exist_ok=True)
+    os.makedirs(dirname + '/bin_num10', exist_ok=True)
+    os.makedirs(dirname + '/bin_size100', exist_ok=True)
 
     # Calculate mean coverage
     bc_df = preprocess(dirname, read_len, num_bin_in_frag, minreads, processNline)
@@ -283,23 +283,23 @@ def main():
             _reads_covered_fragment_percent.append(_df['reads_covered_fragment_percent'])
             _frag_mean_depth.append((_df['frag_mean_depth']))
 
-            with open(dirname + '/bin_num100/mean_cov_bin_' + str(frag_bin), 'wb') as fp:
+            with open(dirname + '/bin_num10/mean_cov_bin_' + str(frag_bin), 'wb') as fp:
                 pickle.dump(mean_cov_bin_100bins, fp)
 
-            # bin_size10
-            bin_size = 10
+            # bin_size100
+            bin_size = 100
             mean_cov_binSize = frag_mean_cov_binSize(_df, read_len, frag_bin, bin_size, minreads, nk)
 
-            with open(dirname + '/bin_size10/mean_cov_bin_' + str(frag_bin), 'wb') as fp:
+            with open(dirname + '/bin_size100/mean_cov_bin_' + str(frag_bin), 'wb') as fp:
                 pickle.dump(mean_cov_binSize, fp)
         except Exception as e:
             print(f"Error at frag_bin={frag_bin}: {e}")
             traceback.print_exc()
 
-    type1 = 'bin_num100'
+    type1 = 'bin_num10'
     with open(dirname + '/' + type1 + '/mean_cov_bin_' + str(minreads) + '_done', 'w') as f:
         f.write("done\n")
-    type2 = 'bin_size10'
+    type2 = 'bin_size100'
     with open(dirname + '/' + type2 + '/mean_cov_bin_' + str(minreads) + '_done', 'w') as f:
         f.write("done\n")
 
@@ -315,14 +315,14 @@ def main():
     for i in range(n):
         frag_bin = frag_len_min + bin_frag_by * i
         try:
-            bin_type = 'bin_num100'
+            bin_type = 'bin_num10'
             mean_cov_bin_combined_log = s.parse_mean_cov_bin(frag_bin, bin_type)
             s.box_plot_bin(mean_cov_bin_combined_log, frag_bin, bin_type)
             s.line_plot_bin10(mean_cov_bin_combined_log, frag_bin, bin_type)
         except Exception as e:
             print(e)
         try:
-            bin_type = 'bin_size10'
+            bin_type = 'bin_size100'
             mean_cov_bin_combined_log = s.parse_mean_cov_bin(frag_bin, bin_type)
             s.box_plot_bin(mean_cov_bin_combined_log, frag_bin, bin_type)
             s.line_plot_bin10(mean_cov_bin_combined_log, frag_bin, bin_type)

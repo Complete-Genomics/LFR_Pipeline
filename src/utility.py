@@ -169,12 +169,56 @@ def bed_sum(bed_file_merged):
     with open(bed_file_merged, 'r') as f:
         for line in f:
             info = line.strip().split('\t')
+            if len(info) < 3:
+                continue
             chrom = info[0]
             start = int(info[1])
             end = int(info[2])
             total_len_merged +=end-start+1
     # print(total_len_merged)
     return total_len_merged
+
+def write_merged_bed(df_bed, bed_file_merged):
+    """Write a sorted, merged BED file without depending on bedtools."""
+    if df_bed.empty:
+        open(bed_file_merged, "w").close()
+        return 0
+
+    bed_rows = df_bed[['Chrom', 'start', 'end']].dropna().copy()
+    if bed_rows.empty:
+        open(bed_file_merged, "w").close()
+        return 0
+
+    bed_rows['start'] = bed_rows['start'].astype(int)
+    bed_rows['end'] = bed_rows['end'].astype(int)
+    bed_rows = bed_rows.sort_values(['Chrom', 'start', 'end'])
+
+    merged_rows = []
+    current_chrom = None
+    current_start = None
+    current_end = None
+
+    for row in bed_rows.itertuples(index=False):
+        chrom = row.Chrom
+        start = int(row.start)
+        end = int(row.end)
+        if current_chrom is None or chrom != current_chrom or start > current_end:
+            if current_chrom is not None:
+                merged_rows.append((current_chrom, current_start, current_end))
+            current_chrom = chrom
+            current_start = start
+            current_end = end
+        else:
+            current_end = max(current_end, end)
+
+    if current_chrom is not None:
+        merged_rows.append((current_chrom, current_start, current_end))
+
+    with open(bed_file_merged, "w") as out:
+        for chrom, start, end in merged_rows:
+            out.write(f"{chrom}\t{start}\t{end}\n")
+
+    return sum(end - start + 1 for _, start, end in merged_rows)
 
 def manipulate_df_gaps(test_barcodes, min_frag, max_frag, min_reads, read_len):
     '''
@@ -233,17 +277,20 @@ def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads,
     df = test_barcodes.reindex(columns=columns).head(100)
     df.to_csv(f"{dirname}/frag_and_bc_dataframe.tsv", sep='\t', index=False)
 
+    unique_barcode_count = test_barcodes['Barcode'].nunique() if 'Barcode' in test_barcodes else 0
+    fragment_count = test_barcodes.shape[0]
+    total_frag_read_count = test_barcodes['N_Reads'].sum() if 'N_Reads' in test_barcodes else 0
+    frags_per_bc = fragment_count/unique_barcode_count if unique_barcode_count else 0
+    avg_frag_len = test_barcodes['Frag_Length'].sum()/fragment_count if fragment_count else 0
+    med_frag_len = test_barcodes['Frag_Length'].median() if fragment_count else 0
+    avg_frag_read_count = total_frag_read_count/fragment_count if fragment_count else 0
+    avg_bc_read_count = total_frag_read_count/unique_barcode_count if unique_barcode_count else 0
+    total_len_merged = 0
+    total_len_merged_pct = 0
+
     try:
-        unique_barcode_count  = test_barcodes['Barcode'].nunique()
-        fragment_count = test_barcodes.shape[0]
-        frags_per_bc = fragment_count/unique_barcode_count
-        avg_frag_len = test_barcodes['Frag_Length'].sum()/fragment_count
-        med_frag_len = test_barcodes['Frag_Length'].median()
-        avg_frag_read_count = test_barcodes['N_Reads'].sum()/fragment_count
-        avg_bc_read_count = test_barcodes['N_Reads'].sum()/unique_barcode_count
-        total_frag_read_count = test_barcodes['N_Reads'].sum()
         ## create frag.bed file
-        df_bed = test_barcodes
+        df_bed = test_barcodes.copy()
         df_bed['end'] = df_bed['Min_Pos']+df_bed['Frag_Length']
         df_bed['start'] = df_bed['Min_Pos']
         df_bed = df_bed[['Chrom', 'start', 'end', 'Barcode', 'N_Reads']]
@@ -251,14 +298,13 @@ def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads,
         df_bed.to_csv(bed_file, index=False, header=False, sep='\t')
         ## frag.merged.bed
         bed_file_merged =   f"{dirname}/frag_minreads"+str(min_reads)+"_merged.bed"
-        bashCommand = "bedtools merge -i {} > {}".format(bed_file, bed_file_merged)
-        os.system(bashCommand)       
-        # ## frag coverage
-        total_len_merged = bed_sum(bed_file_merged)
+        total_len_merged = write_merged_bed(df_bed, bed_file_merged)
         GCA_000001405_15_GRCh38_len= 2934876545
         total_len_merged_pct = total_len_merged/GCA_000001405_15_GRCh38_len
-    except:
-        print('step1 failed')
+    except Exception as e:
+        bed_file_merged = f"{dirname}/frag_minreads"+str(min_reads)+"_merged.bed"
+        open(bed_file_merged, "w").close()
+        print(f'step1 failed: {e}', file=sys.stderr)
     try:
         out_stats =  f"{dirname}/frag_summary_minreads{min_reads}.txt"
         with open(out_stats, "w") as frag_stats:
@@ -272,7 +318,7 @@ def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads,
                 f"Total Reads in Frag:\t{total_frag_read_count}\n"
                 f"Fragments_length_total_pct_genome:\t{total_len_merged_pct}\n"
                 f"Fragments_length_total:\t{total_len_merged}\n"
-                f"Ave_read_per_kbp:\t{1000*avg_frag_read_count/med_frag_len}",
+                f"Ave_read_per_kbp:\t{1000*avg_frag_read_count/med_frag_len if med_frag_len else 0}",
                 file = frag_stats)
 
         # mapped_bc_notin_fragment = bcs_total-unique_barcode_count 
@@ -287,10 +333,13 @@ def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads,
     except Exception as e: print('write to frag_summary_minreads.txt failed')
 
     # create plots of frag length distribution and n reads
-    frag_plot = sns.distplot([i for i in test_barcodes['Frag_Length'] if i<=plot_cutoff])
+    frag_lengths = [i for i in test_barcodes['Frag_Length'] if i<=plot_cutoff]
+    if frag_lengths:
+        sns.distplot(frag_lengths)
     plt.savefig( f"{dirname}/frag_length_distribution.pdf")
     plt.clf()
-    reads_plot = sns.distplot(test_barcodes['N_Reads'], kde=False)
+    if not test_barcodes.empty:
+        sns.distplot(test_barcodes['N_Reads'], kde=False)
     plt.savefig(f"{dirname}/n_read_distribution.pdf")
     plt.clf()
 
@@ -507,14 +556,35 @@ def reads_per_bc_distribution_mapped(dirname, barcode_summary):
     # df_sorted.to_csv(dirname + f"/reads_per_bc_distribution.tsv", sep='\t', index=False, float_format='%.7f')
     return df_sorted
 
+def safe_literal_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if pd.isna(value):
+        return []
+    try:
+        parsed = literal_eval(value)
+    except (ValueError, SyntaxError):
+        return []
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, tuple):
+        return list(parsed)
+    return [parsed]
+
 def parse_bc100(barcode_collection, df_sorted, min_reads, reads_range, min_frag, dirname):
     ## bc100+ reads list
 
-    df_bc100= df_sorted[df_sorted['reads_per_bc']>=reads_range]
-    df_bc100.bc_name=df_bc100.bc_name.apply(literal_eval)
+    df_bc100= df_sorted[df_sorted['reads_per_bc']>=reads_range].copy()
+    if df_bc100.empty:
+        return
+    df_bc100['bc_name']=df_bc100['bc_name'].apply(safe_literal_list)
     lst_bc100 = []
     for i in df_bc100['bc_name']:
         lst_bc100.extend(i)
+    if not lst_bc100:
+        return
     print('Total BCs (100+): {}'.format(len(lst_bc100)))
 
     ## frag with bc100+

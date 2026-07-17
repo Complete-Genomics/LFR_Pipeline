@@ -5,3 +5,4 @@ memory
 */__pycache__
 test/
 data/
+config/

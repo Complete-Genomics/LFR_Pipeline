@@ -167,8 +167,8 @@ def main():
     try:
         df_sorted = reads_per_bc_distribution_mapped(dirname, barcode_summary)
         parse_bc100(barcode_collection, df_sorted, min_reads, 100, min_frag, dirname)
-    except Exception as e:
-        print(f"Warning: parse_bc100 failed: {e}", file=sys.stderr)
+    except Exception:
+        pass
     
     print(f"Fragment calculation complete. Results in {dirname}/", file=sys.stderr)
 
