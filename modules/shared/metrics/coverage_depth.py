@@ -3,9 +3,8 @@
 
 import argparse
 import os
+import subprocess
 from collections import Counter
-
-import pysam
 
 
 def count_non_n_bases(fasta_path):
@@ -19,45 +18,39 @@ def count_non_n_bases(fasta_path):
     return total
 
 
-def keep_read(read, min_mapq):
-    aln = read.alignment
-    if aln.is_unmapped or aln.is_duplicate or aln.is_secondary or aln.is_supplementary:
-        return False
-    if aln.is_qcfail:
-        return False
-    return aln.mapping_quality >= min_mapq
-
-
-def depth_histogram(bam_path, min_mapq, min_baseq):
+def depth_histogram(bam_path, min_mapq, min_baseq, samtools):
     hist = Counter()
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        if not bam.has_index():
-            raise SystemExit(
-                "BAM index is required for coverage depth: {}. "
-                "Run samtools index first or add the .bai file as a workflow input.".format(bam_path)
+    exclude_flags = str(256 + 512 + 1024 + 2048)
+    command = [
+        samtools,
+        "depth",
+        "-q", str(min_baseq),
+        "-Q", str(min_mapq),
+        "-G", exclude_flags,
+        bam_path,
+    ]
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) < 3:
+            continue
+        depth = int(fields[2])
+        if depth > 0:
+            hist[depth] += 1
+
+    _, stderr = proc.communicate()
+    if proc.returncode != 0:
+        raise SystemExit(
+            "samtools depth failed with exit code {}:\n{}".format(
+                proc.returncode, stderr
             )
-        for chrom in bam.references:
-            for pileup_col in bam.pileup(
-                chrom,
-                stepper="all",
-                min_base_quality=0,
-                truncate=False,
-            ):
-                depth = 0
-                for pileup_read in pileup_col.pileups:
-                    if pileup_read.is_del or pileup_read.is_refskip:
-                        continue
-                    if not keep_read(pileup_read, min_mapq):
-                        continue
-                    query_pos = pileup_read.query_position
-                    if query_pos is None:
-                        continue
-                    qualities = pileup_read.alignment.query_qualities
-                    if qualities is not None and qualities[query_pos] < min_baseq:
-                        continue
-                    depth += 1
-                if depth > 0:
-                    hist[depth] += 1
+        )
     return hist
 
 
@@ -105,10 +98,11 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--mapq", type=int, default=0)
     parser.add_argument("--baseq", type=int, default=0)
+    parser.add_argument("--samtools", default="samtools")
     args = parser.parse_args()
 
     total_bases = count_non_n_bases(args.ref)
-    hist = depth_histogram(args.bam, args.mapq, args.baseq)
+    hist = depth_histogram(args.bam, args.mapq, args.baseq, args.samtools)
     write_tables(hist, total_bases, args.outdir)
     avg_depth, coverage, cov4, cov10, cov20 = summarize(hist, total_bases)
 
