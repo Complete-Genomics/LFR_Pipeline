@@ -80,6 +80,7 @@ rule get_consensus_fasta:
         ref = config['params']['ref_fa'],
         samtools = config['params'].get('samtools', 'samtools'),
         min_reads = config['frag_de_novo']['reads_per_BC'],
+        downsample_ratio = config['params'].get('downsample_ratio', 1.0),
         use_samtools_reference = config['params'].get('use_samtools_reference', False)
     run:
         command = ["{params.python}",
@@ -91,6 +92,7 @@ rule get_consensus_fasta:
                     "--dict_file {input.chr_dict}",
                     "--split_index {wildcards.split_idx}",
                     "--min_reads {params.min_reads}",
+                    "--downsample_ratio {params.downsample_ratio}",
                     "--samtools {params.samtools}"
                     ] 
         if params.use_samtools_reference:

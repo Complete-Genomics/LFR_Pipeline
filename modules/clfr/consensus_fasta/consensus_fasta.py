@@ -60,6 +60,9 @@ BATCH_ID = args.batch_id
 SAMTOOLS_ARG = args.samtools
 USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
 
+if DOWNSAMPLE_RATIO <= 0 or DOWNSAMPLE_RATIO > 1:
+    raise ValueError("--downsample_ratio must be > 0 and <= 1")
+
 def get_data_tools_root(ref_path):
     marker = "/Data_and_Tools/"
     if marker not in ref_path:
@@ -382,7 +385,8 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     if DOWNSAMPLE_RATIO < 1.0 and len(reads_list_obj) > 1:
         target_count = max(1, int(len(reads_list_obj) * DOWNSAMPLE_RATIO))
         # Sample indices and sort to preserve original order
-        indices = sorted(random.sample(range(len(reads_list_obj)), target_count))
+        rng = random.Random(umi_id)
+        indices = sorted(rng.sample(range(len(reads_list_obj)), target_count))
         reads_list_obj = [reads_list_obj[i] for i in indices]
 
     bed_lines = generate_bed_data(reads_list_obj, header_dict_data, STRINGTIE_PATH, current_temp_dir)
