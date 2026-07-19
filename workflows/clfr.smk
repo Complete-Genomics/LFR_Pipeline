@@ -113,8 +113,8 @@ def run_all_input(wildcards):
     #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
 
     if config['modules']['consensus_fasta'] == True:
-        run_all_files.extend([ 'Align/consensus/consensus.fasta', "Align/consensus/consensus_frag_length_distribution.pdf",'Align/consensus/consensus.fixRC.fasta'])
-        # "Align/consensus/consensus.fixRC_SQANTI3_report.pdf"])
+        run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.pdf",'consensus/consensus.fixRC.fasta'])
+        # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
 
     RNA_16S_MODE = config['modules'].get('rna_16s', 'align_ref')
     if RNA_16S_MODE == 'meta_denovo':

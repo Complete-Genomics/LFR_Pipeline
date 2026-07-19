@@ -72,7 +72,7 @@ rule get_consensus_fasta:
         bam="Align/tmp/{id}_{chr}.name.sort.bam", 
         chr_dict = "Align/samtools_idx.txt"     
     output:
-        "Align/tmp/{chr}/{id}_{chr}_{split_idx}.fasta"
+        "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.fasta"
     threads: 1
     params:
         python = config['params']['general_python'],
@@ -104,9 +104,9 @@ split_cnt = list(range(NUM_SPLITS_CONSENSUS))  # [0, 1, 2, ..., 19]
 
 rule fix_consensus_format:
     input:
-        "Align/tmp/{chr}/{id}_{chr}_{i}.fasta"
+        "consensus/tmp/{chr}/{id}_{chr}_{i}.fasta"
     output:
-        "Align/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta"
+        "consensus/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta"
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir']
@@ -116,17 +116,17 @@ rule fix_consensus_format:
 
 rule merge_consensus_fasta:
     input:
-        fa = expand("Align/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta", id=config['samples']['id'],chr=CHROMS, i=split_cnt),
+        fa = expand("consensus/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta", id=config['samples']['id'],chr=CHROMS, i=split_cnt),
     output:
-        "Align/consensus/consensus.fasta"
+        "consensus/consensus.fasta"
     shell:
         "cat {input.fa} > {output} "
 
 rule fasta_frag_len_distribution_consensus:
     input:
-        "Align/consensus/consensus.fasta"
+        "consensus/consensus.fasta"
     output:
-        "Align/consensus/consensus_frag_length_distribution.pdf",
+        "consensus/consensus_frag_length_distribution.pdf",
         # "Align/frag_length_distribution.txt"
     params:
         python = config['params']['general_python'],
@@ -136,7 +136,7 @@ rule fasta_frag_len_distribution_consensus:
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/exon2fasta.py",
                     "--fasta {input}",
-                    "--outdir Align/consensus/",
+                    "--outdir consensus/",
                     "--name consensus",
                     "--minreads_fasta {params.minreads_fasta}",
                     "--module metrics_basic"] 
@@ -144,9 +144,9 @@ rule fasta_frag_len_distribution_consensus:
 
 rule map_fasta_consensus:
     input:
-        "Align/consensus/consensus.fasta"
+        "consensus/consensus.fasta"
     output:
-        "Align/consensus/consensus.paf"
+        "consensus/consensus.paf"
     params:
         minimap = config['params']['minimap2'],
         refgenome = config['params']['ref_fa_mrna']
@@ -159,10 +159,10 @@ rule map_fasta_consensus:
 
 rule correc_direction_consensus:
     input:
-        consensus_fa = "Align/consensus/consensus.fasta",
-        consensus_paf = "Align/consensus/consensus.paf"
+        consensus_fa = "consensus/consensus.fasta",
+        consensus_paf = "consensus/consensus.paf"
     output:
-        "Align/consensus/consensus.fixRC.fasta"
+        "consensus/consensus.fixRC.fasta"
     params:
         python = config['params']['general_python'],
         flank_end = config['frag_de_novo']['flank_end'],
@@ -176,15 +176,15 @@ rule correc_direction_consensus:
                     "--flank_end {params.flank_end} ",
                     "--fasta {input.consensus_fa}",
                     "--module fix_fa_rc ",
-                    "--outdir Align/ "
+                    "--outdir ./ "
                     ] 
             shell(" ".join(command))
         else:
-            shell("cd Align/consensus && ln -s consensus.fasta consensus.fixRC.fasta ")
+            shell("cd consensus && ln -s consensus.fasta consensus.fixRC.fasta ")
 
 # rule eval_Mandalorion:
 #     input:
-#         "Align/consensus/consensus.fixRC.fasta"
+#         "consensus/consensus.fixRC.fasta"
 #     output:
 #         "Align/tmp/mando/Isoforms.filtered.clean.gtf"
 #     params:
@@ -234,6 +234,6 @@ rule report_consensus:
     input:
         "Align/tmp/SQANTI3_QC_output/data_SQANTI3_report.pdf"
     output:
-        "Align/consensus/consensus.fixRC_SQANTI3_report.pdf"
+        "consensus/consensus.fixRC_SQANTI3_report.pdf"
     run:
         shell("cp {input} {output} ")
