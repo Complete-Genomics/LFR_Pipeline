@@ -159,11 +159,12 @@ rule ercc_count:
 rule ercc_plot:
     input:
         cnt = "Align/ercc_count.txt",
+        frag_bc_df = "Calc_Frag_Length_{}/frag_and_bc_dataframe.tsv".format(config['calc_frag']['split_dist'][0]),
     output:
         "Align/ercc_count_ratio.txt"
     params:
         src_dir = config['params']['src_dir'],
         python = config['params']['general_python'],
-        ercc_ref_gc = config['params']['ercc_ref_gc']
+        ercc_ref_gc = config['params']['src_dir'] + "/modules/clfr/calc_frag_len/ercc_truth.txt"
     shell:
-        "{params.python} {params.src_dir}/modules/clfr/calc_frag_len/ercc_count.py --ercc_count {input.cnt} --ercc_ref {params.ercc_ref_gc} --output {output}"
+        "{params.python} {params.src_dir}/modules/clfr/calc_frag_len/ercc_count.py --ercc_count {input.cnt} --ercc_ref {params.ercc_ref_gc} --frag_bc_df {input.frag_bc_df} --output {output}"
