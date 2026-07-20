@@ -138,7 +138,7 @@ rule run_denovo_parallel:
         k_min = 41,
         k_max = 41,
         megahit = config['params']['megahit'],
-        rg = config['params'].get('rg', 'rg'),
+        tmp_dir = config['frag_de_novo'].get('tmp_dir', '/dev/shm'),
         src_dir = config['params']['src_dir']
     run:
         # chunk to run on mutiple nodes, or a dummy number 300000000 to run on single node
@@ -153,7 +153,7 @@ rule run_denovo_parallel:
                    "--module denovo_parallel ",
                    "--min_ctg_len {params.min_ctg_len} ",
                    "--megahit {params.megahit} ",
-                   "--rg {params.rg} ",
+                   "--tmp_dir {params.tmp_dir} ",
                    "--nth_of_nodes 0"]
         if params.end_idx not in (None, "", "all"):
             command.append("--end_idx {params.end_idx} ")

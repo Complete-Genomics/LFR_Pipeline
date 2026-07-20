@@ -169,6 +169,7 @@ frag_de_novo:
     denovo_type: 'correct_rc'
     end_idx:
     start_idx: 0
+    tmp_dir: /dev/shm
     flank_end: 30
     adapter_seq: "CTCAGCAGAGGG"
     min_ctg_len: 400

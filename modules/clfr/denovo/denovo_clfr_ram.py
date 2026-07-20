@@ -20,6 +20,7 @@ import subprocess
 import multiprocessing as mp
 from multiprocessing import Pool
 import argparse
+import shutil
 from collections import defaultdict
 import itertools
 import fcntl
@@ -41,6 +42,7 @@ parser.add_argument("--num_node", type=int, required=False)
 parser.add_argument("--nth_of_nodes", type=int, required=False)
 parser.add_argument('--debug', action='store_true', default=False, help='Enable debug mode')
 parser.add_argument("--megahit", type=str, default='megahit', help='Path to megahit binary')
+parser.add_argument("--tmp_dir", type=str, default="/dev/shm", help="Root directory for megahit temporary outputs")
 # parser.add_argument("--rg", type=str, default='rg', help='Path to rg (ripgrep) binary')
 
 
@@ -59,7 +61,53 @@ start_idx = args.start_idx
 end_idx = args.end_idx
 ID = args.nth_of_nodes
 MEGAHIT = args.megahit
+TMP_DIR = Path(args.tmp_dir)
 # RG = args.rg
+
+class NullLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+def tmp_root():
+    return TMP_DIR / f"{BATCH_LANE}_{ID}"
+
+
+def barcode_tmp_dir(barcode):
+    return tmp_root() / barcode
+
+
+def cleanup_path(path):
+    if DEBUG:
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def append_contigs_and_cleanup(barcode, returncode, stderr, lock):
+    barcode_dir = barcode_tmp_dir(barcode)
+    contigs = barcode_dir / f"{barcode}.contigs.fa"
+    try:
+        if returncode != 0:
+            print(f"WARNING: megahit failed for barcode {barcode}: {stderr.decode(errors='replace').strip()}", flush=True)
+            return
+        if not contigs.exists():
+            print(f"WARNING: megahit output missing for barcode {barcode}: {contigs}", flush=True)
+            return
+
+        bc = f'>{barcode}'
+        with lock:
+            with open(contigs) as source, open(f"denovo/final_contigs_{ID}.fa", "a") as out:
+                for line_no, line in enumerate(source, 1):
+                    if line_no in (1, 3, 5, 7):
+                        out.write(bc + line)
+                    else:
+                        out.write(line)
+    finally:
+        cleanup_path(barcode_dir)
+
 
 def process_barcode_se(barcode, shared_meta_data2, lock):
     K_MIN = 41
@@ -81,7 +129,7 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
         # Command for megahit
         megahit_command = (
             f"{megahit} -r /dev/stdin -t {num_cpu} "
-            f"-o /dev/shm/{BATCH_LANE}_{ID}/{barcode} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
+            f"-o {barcode_tmp_dir(barcode)} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
             f"--min-contig-len={MIN_CTG_LEN}"
         )
 
@@ -95,13 +143,7 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
         )
         stdout, stderr = process.communicate(input=r2_fasta.read())
 
-        bc = f'>{barcode}'   
-        # if DEBUG==True:
-        #     command = f"sed '1s/^/{bc}/; 3s/^/{bc}/; 5s/^/{bc}/; 7s/^/{bc}/' /dev/shm/{BATCH_LANE}_{ID}/{barcode}/{barcode}.contigs.fa >> denovo/final_contigs_{ID}.fa "
-        # else:
-        command = f"sed '1s/^/{bc}/; 3s/^/{bc}/; 5s/^/{bc}/; 7s/^/{bc}/' /dev/shm/{BATCH_LANE}_{ID}/{barcode}/{barcode}.contigs.fa >> denovo/final_contigs_{ID}.fa && rm -r /dev/shm/{BATCH_LANE}_{ID}/{barcode} "
-        with lock:
-            res = subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        append_contigs_and_cleanup(barcode, process.returncode, stderr, lock)
 
     except Exception as e: print(e)
     return
@@ -112,7 +154,6 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     K_MAX = 41
     MIN_CTG_LEN = 400
     megahit = MEGAHIT
-    rg = RG
 
     try:
         # Create in-memory files for R1 and R2 using io.BytesIO
@@ -127,7 +168,7 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
         # Command for megahit
         megahit_command = (
             f"{megahit} -1 /dev/stdin -2 /dev/stdin -t {num_cpu} "
-            f"-o /dev/shm/{BATCH_LANE}_{ID}/{barcode} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
+            f"-o {barcode_tmp_dir(barcode)} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
             f"--min-contig-len={MIN_CTG_LEN}"
         )
 
@@ -147,104 +188,129 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
         # else:
         #     print(f"Megahit success: {stdout.decode()}")
 
-        ## add bc to fasta header line
-        bc = f'>{barcode}'
-        
-        command = f"sed '1s/^/{bc}/; 3s/^/{bc}/; 5s/^/{bc}/; 7s/^/{bc}/' /dev/shm/{BATCH_LANE}_{ID}/{barcode}/{barcode}.contigs.fa >> denovo/final_contigs_{ID}.fa && rm -r /dev/shm/{BATCH_LANE}_{ID}/{barcode} "
-        with lock:
-            res = subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            # Check if the sed command executed successfully
-            # if res.returncode != 0:
-            #     print(f"Sed command failed: {res.stderr.decode()}")
-            # else:
-            #     print(f"Sed command success: {res.stdout.decode()}")
+        append_contigs_and_cleanup(barcode, process.returncode, stderr, lock)
 
     except Exception as e: print(e)
     return
 
-def denovo_pe(n_line_chunk, start_idx):
-    K_MIN = 41
-    K_MAX = 41
-    MIN_CTG_LEN = 400
-    LOC = 'sj'
+def add_sgrep_line(meta_data, line):
     bc_len = 15
+    info = line.strip().split('\t')
+    if len(info) < 2:
+        return False
+    bc = info[0][5:5+bc_len]
+    id = '>'+info[0][22:]
+    seq = info[1]
+    meta_data[bc].append(id)
+    meta_data[bc].append(seq)
+    return True
 
+
+def process_pe_metadata(meta_data1, meta_data2, start_idx):
+
+    # subprocess.call(f'mkdir -p /dev/shm/{BATCH_LANE}_{ID}', shell=True)
+
+    if num_processes == 1:
+        lock = NullLock()
+        for barcode in meta_data2.keys():
+            process_barcode_pe(barcode, meta_data1, meta_data2, lock)
+    else:
+        with mp.Manager() as manager:
+            shared_meta_data1 = manager.dict(meta_data1)
+            shared_meta_data2 = manager.dict(meta_data2)
+            lock = manager.Lock()
+
+            with mp.Pool(num_processes) as pool:
+                pool.starmap(process_barcode_pe, [(barcode, shared_meta_data1, shared_meta_data2, lock) for barcode in meta_data2.keys()])
+
+    print(f'start_idx={start_idx}')
+    print(f'denovo_BC_counts={len(meta_data2)}')
+    return sum(len(v) // 2 for v in meta_data2.values())
+
+
+def process_se_metadata(meta_data2, start_idx):
+    if num_processes == 1:
+        lock = NullLock()
+        for barcode in meta_data2.keys():
+            process_barcode_se(barcode, meta_data2, lock)
+    else:
+        with mp.Manager() as manager:
+            # shared_meta_data1 = manager.dict(meta_data1)
+            shared_meta_data2 = manager.dict(meta_data2)
+            lock = manager.Lock()
+
+            with mp.Pool(num_processes) as pool:
+                pool.starmap(process_barcode_se, [(barcode, shared_meta_data2, lock) for barcode in meta_data2.keys()])
+
+    print(f'start_idx={start_idx}')
+    print(f'denovo_BC_counts={len(meta_data2)}')
+    return sum(len(v) // 2 for v in meta_data2.values())
+
+
+def denovo_pe(n_line_chunk, start_idx):
     meta_data1 = defaultdict(list)
     meta_data2 = defaultdict(list)
 
     ## load reads to mem to speedup, *sgrep.tsv with diff len after trim, unable to use seek to get idx
     with open(f'denovo/{NAME}1_sgrep.tsv', 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
-            info = line.strip().split('\t')
-            bc = info[0][5:5+bc_len]
-            id = '>'+info[0][22:]
-            seq = info[1]
-            meta_data1[bc].append(id)
-            meta_data1[bc].append(seq)
+            add_sgrep_line(meta_data1, line)
 
     with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
-            info = line.strip().split('\t')
-            bc = info[0][5:5+bc_len]
-            id = '>'+info[0][22:]
-            seq = info[1]
-            meta_data2[bc].append(id)
-            meta_data2[bc].append(seq)
+            add_sgrep_line(meta_data2, line)
 
-    # subprocess.call(f'mkdir -p /dev/shm/{BATCH_LANE}_{ID}', shell=True)
+    return process_pe_metadata(meta_data1, meta_data2, start_idx)
 
-    with mp.Manager() as manager:
-        shared_meta_data1 = manager.dict(meta_data1)
-        shared_meta_data2 = manager.dict(meta_data2)
-        lock = manager.Lock()
-
-        with mp.Pool(num_processes) as pool:
-            pool.starmap(process_barcode_pe, [(barcode, shared_meta_data1, shared_meta_data2, lock) for barcode in meta_data2.keys()])
-
-    print(f'start_idx={start_idx}')
-    print(f'denovo_BC_counts={len(meta_data2)}')
-
-
-    ## if no results/bc/bc.fa, bc folder will not be removed
-    # try:
-    #     cmd=f'rm -r /dev/shm/{BATCH_LANE}_{ID}/*'
-    #     subprocess.call(cmd, shell=True)
-    #     # cmd=f'rm -r denovo/splits_{ID}/*'
-    #     # subprocess.call(cmd, shell=True)
-    # except Exception as e: print(e)
-
-    return
 
 def denovo_se(n_line_chunk, start_idx):
-    K_MIN = 41
-    K_MAX = 41
-    MIN_CTG_LEN = 400
-    LOC = 'sj'
-    bc_len = 15
     meta_data2 = defaultdict(list)
 
     ## load reads to mem to speedup, *sgrep.tsv with diff len after trim, unable to use seek to get idx
     with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
-            info = line.strip().split('\t')
-            bc = info[0][5:5+bc_len]
-            id = '>'+info[0][22:]
-            seq = info[1]
-            meta_data2[bc].append(id)
-            meta_data2[bc].append(seq)
+            add_sgrep_line(meta_data2, line)
 
-    with mp.Manager() as manager:
-        # shared_meta_data1 = manager.dict(meta_data1)
-        shared_meta_data2 = manager.dict(meta_data2)
-        lock = manager.Lock()
+    return process_se_metadata(meta_data2, start_idx)
 
-        with mp.Pool(num_processes) as pool:
-            pool.starmap(process_barcode_se, [(barcode, shared_meta_data2, lock) for barcode in meta_data2.keys()])
 
-    print(f'start_idx={start_idx}')
-    print(f'denovo_BC_counts={len(meta_data2)}')
+def iter_denovo_se_chunks(start_idx, n_line_chunk):
+    with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
+        for _ in itertools.islice(f, start_idx):
+            pass
+        chunk_start = start_idx
+        while True:
+            meta_data2 = defaultdict(list)
+            n_lines = 0
+            for line in itertools.islice(f, n_line_chunk):
+                if add_sgrep_line(meta_data2, line):
+                    n_lines += 1
+            if n_lines == 0:
+                break
+            yield chunk_start, meta_data2
+            chunk_start += n_lines
 
-    return
+
+def iter_denovo_pe_chunks(start_idx, n_line_chunk):
+    with open(f'denovo/{NAME}1_sgrep.tsv', 'r') as f1, open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f2:
+        for _ in itertools.islice(f1, start_idx):
+            pass
+        for _ in itertools.islice(f2, start_idx):
+            pass
+        chunk_start = start_idx
+        while True:
+            meta_data1 = defaultdict(list)
+            meta_data2 = defaultdict(list)
+            n_lines = 0
+            for line1, line2 in itertools.islice(zip(f1, f2), n_line_chunk):
+                ok1 = add_sgrep_line(meta_data1, line1)
+                ok2 = add_sgrep_line(meta_data2, line2)
+                if ok1 and ok2:
+                    n_lines += 1
+            if n_lines == 0:
+                break
+            yield chunk_start, meta_data1, meta_data2
+            chunk_start += n_lines
 
 def read_fraction_of_file(file_path, num_node):
     '''
@@ -314,26 +380,42 @@ if __name__ == "__main__":
         # if not os.path.exists(f'denovo/{BATCH_LANE}_{ID}'):
         #     os.mkdir(f'denovo/{BATCH_LANE}_{ID}')
 
-        subprocess.call(f'mkdir -p /dev/shm/{BATCH_LANE}_{ID}', shell=True)
-        if end_idx is None:
-            end_idx = count_sgrep_lines()
-            print(f'end_idx not specified; using all reads: end_idx={end_idx}')
-        if end_idx <= start_idx:
-            raise SystemExit(f"Invalid denovo range: start_idx={start_idx}, end_idx={end_idx}")
-        bins = create_bins(start_idx, end_idx, n_line_chunk)
+        tmp_root().mkdir(parents=True, exist_ok=True)
+        try:
+            if end_idx is None:
+                print(
+                    f'end_idx not specified; streaming all reads from start_idx={start_idx}',
+                    flush=True,
+                )
+                if sequence_type == 'pe':
+                    for chunk_start, meta_data1, meta_data2 in iter_denovo_pe_chunks(start_idx, n_line_chunk):
+                        print(f'processing chunk start_idx={chunk_start} reads={sum(len(v) // 2 for v in meta_data2.values())}', flush=True)
+                        process_pe_metadata(meta_data1, meta_data2, chunk_start)
+                elif sequence_type == 'se':
+                    for chunk_start, meta_data2 in iter_denovo_se_chunks(start_idx, n_line_chunk):
+                        print(f'processing chunk start_idx={chunk_start} reads={sum(len(v) // 2 for v in meta_data2.values())}', flush=True)
+                        process_se_metadata(meta_data2, chunk_start)
+                else:
+                    raise SystemExit(f'sequence_type error: {sequence_type}')
+            else:
+                if end_idx <= start_idx:
+                    raise SystemExit(f"Invalid denovo range: start_idx={start_idx}, end_idx={end_idx}")
+                bins = create_bins(start_idx, end_idx, n_line_chunk)
 
-        if sequence_type == 'pe':
-            for start_idx_each_chunk,end_idx_each_chunk in bins:
-                n_line_each_chunk = end_idx_each_chunk-start_idx_each_chunk
-                # print(f'{start_idx_each_chunk} , {end_idx_each_chunk}')
-                denovo_pe(n_line_each_chunk, start_idx_each_chunk)
-        elif sequence_type == 'se':
-            for start_idx_each_chunk,end_idx_each_chunk in bins:
-                n_line_each_chunk = end_idx_each_chunk-start_idx_each_chunk
-                denovo_se(n_line_each_chunk, start_idx_each_chunk)
-                # print(f'{start_idx_each_chunk} , {n_line_each_chunk}, {end_idx_each_chunk}')
-        else:
-            print('sequence_type error')
+                if sequence_type == 'pe':
+                    for start_idx_each_chunk,end_idx_each_chunk in bins:
+                        n_line_each_chunk = end_idx_each_chunk-start_idx_each_chunk
+                        # print(f'{start_idx_each_chunk} , {end_idx_each_chunk}')
+                        denovo_pe(n_line_each_chunk, start_idx_each_chunk)
+                elif sequence_type == 'se':
+                    for start_idx_each_chunk,end_idx_each_chunk in bins:
+                        n_line_each_chunk = end_idx_each_chunk-start_idx_each_chunk
+                        denovo_se(n_line_each_chunk, start_idx_each_chunk)
+                        # print(f'{start_idx_each_chunk} , {n_line_each_chunk}, {end_idx_each_chunk}')
+                else:
+                    raise SystemExit(f'sequence_type error: {sequence_type}')
+        finally:
+            cleanup_path(tmp_root())
         print(f'end={datetime.datetime.now()}')
 
         cmd = f'touch denovo/frag_denovo_done'
@@ -350,4 +432,3 @@ if __name__ == "__main__":
         parse_bc_fasta(in_fasta)
     else:
         print('module not found')
-
