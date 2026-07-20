@@ -3,7 +3,7 @@ SEQUENCE_TYPE = config['params']['sequence_type'].lower()
 MRNA_MAPPER = config['params']['mrna_mapper'].lower()
 
 megahit = config['params']['megahit']
-rg = config['params'].get('rg', 'rg')
+# rg = config['params'].get('rg', 'rg')
 bbduk = config['params']['bbduk']
 bgzip = config['params']['bgzip']
 

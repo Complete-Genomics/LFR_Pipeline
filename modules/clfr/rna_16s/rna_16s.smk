@@ -2,8 +2,6 @@
 # Input: Align/{SAMPLE_ID}.sort.bam from upstream step
 # Implements 3 methods: meta_denovo, align_ref, frag_denovo
 # Selected by config['modules']['rna_16s']: 'meta_denovo' | 'align_ref' | 'frag_denovo' | False
-import os
-from pathlib import Path
 
 # ============================================================================
 # Configuration from config.yaml
@@ -23,9 +21,8 @@ PYTHON = config['params'].get('general_python', 'python3')
 SPADES = config['frag_de_novo'].get('denovo_assembler', 'SPAdes-3.14.0-Linux/bin/spades.py')
 QUAST = config['frag_de_novo'].get('quast_dir', 'quast/quast.py')
 MINIMAP = config['frag_de_novo'].get('minimap', 'minimap2-2.16_x64-linux/minimap2')
-BWA='bwa'
-SAMTOOLS='samtools'
-SCRIPT_DIR = str(Path(workflow.basedir).parent / 'rna_16s')
+SAMTOOLS = config['params'].get('samtools', 'samtools')
+SCRIPT_DIR = config['params']['src_dir'] + "modules/clfr/rna_16s"
 
 # Thread counts
 THREADS_BWA = config['threads'].get('bwa', 20)
@@ -44,14 +41,25 @@ rule meta_denovo:
     params:
         spades=SPADES,
         out_dir="rna_16s/meta_denovo",
-        threads=THREADS_BWA
-    shell:
-        """
-        {params.spades} -k 55,77,99,127 --meta \
-            -t {params.threads} \
-            -1 {input.r1} -2 {input.r2} \
-            -o {params.out_dir}
-        """
+        threads=THREADS_BWA,
+        sequence_type=SEQUENCE_TYPE
+    run:
+        if params.sequence_type == "pe":
+            shell(
+                "{params.spades} -k 55,77,99,127 --meta "
+                "-t {params.threads} "
+                "-1 {input.r1} -2 {input.r2} "
+                "-o {params.out_dir}"
+            )
+        elif params.sequence_type == "se":
+            shell(
+                "{params.spades} -k 55,77,99,127 --meta "
+                "-t {params.threads} "
+                "-s {input.r2} "
+                "-o {params.out_dir}"
+            )
+        else:
+            raise ValueError("Unknown sequence_type: {}".format(params.sequence_type))
 
 
 # ============================================================================
@@ -60,8 +68,8 @@ rule meta_denovo:
 
 rule align_idxstats:
     input:
-        bam=f"Align/{SAMPLE_ID}.sort.bam",
-        bai=f"Align/{SAMPLE_ID}.sort.bam.bai"
+        bam=f"Align/{SAMPLE_ID}.sort.removedup_rm000.bam",
+        bai=f"Align/{SAMPLE_ID}.sort.removedup_rm000.bam.bai"
     output:
         stats=f"Align/{SAMPLE_ID}.idxstats.txt"
     params:
@@ -87,11 +95,14 @@ rule frag_denovo_bc2fq:
     params:
         python=PYTHON,
         script=SCRIPT_DIR + '/bc2fq.py',
-        outdir="rna_16s/frag_denovo/fq"
+        outdir="rna_16s/frag_denovo/fq",
+        sequence_type=SEQUENCE_TYPE
     shell:
         """
         mkdir -p {params.outdir}
-        {params.python} {params.script} --r1r2 1 --dirname ./ --bc_list {input.bc_list} --outdir {params.outdir}
+        if [[ "{params.sequence_type}" == "pe" ]]; then
+            {params.python} {params.script} --r1r2 1 --dirname ./ --bc_list {input.bc_list} --outdir {params.outdir}
+        fi
         {params.python} {params.script} --r1r2 2 --dirname ./ --bc_list {input.bc_list} --outdir {params.outdir}
         """
 
@@ -109,16 +120,28 @@ rule frag_denovo_spades:
         python=PYTHON,
         get_max_fa=SCRIPT_DIR + '/get_max_fa.py',
         out_dir="rna_16s/frag_denovo/spades/{bc}",
-        threads=4
-    shell:
-        """
-        {params.spades} -k 55 -t {params.threads} \
-            -1 {input.r1} -2 {input.r2} \
-            -o {params.out_dir}
-        {params.python} {params.get_max_fa} \
-            --input {params.out_dir}/contigs.fasta \
-            --output {output.contigs}
-        """
+        threads=4,
+        sequence_type=SEQUENCE_TYPE
+    run:
+        if params.sequence_type == "pe":
+            shell(
+                "{params.spades} -k 55 -t {params.threads} "
+                "-1 {input.r1} -2 {input.r2} "
+                "-o {params.out_dir}"
+            )
+        elif params.sequence_type == "se":
+            shell(
+                "{params.spades} -k 55 -t {params.threads} "
+                "-s {input.r2} "
+                "-o {params.out_dir}"
+            )
+        else:
+            raise ValueError("Unknown sequence_type: {}".format(params.sequence_type))
+        shell(
+            "{params.python} {params.get_max_fa} "
+            "--fafile {params.out_dir}/contigs.fasta "
+            "--max_fa {output.contigs}"
+        )
 
 
 # Step 3.4: Merge all barcode contigs (uses checkpoint for dynamic barcode list)
@@ -129,7 +152,7 @@ def get_bc_contigs(wildcards):
     return expand("rna_16s/frag_denovo/spades/{bc}/contigs_max.fasta", bc=bcs)
 
 # Step 3.1: Select barcodes with appropriate read count (checkpoint for dynamic DAG)
-rule frag_denovo_bc_stats:
+checkpoint frag_denovo_bc_stats:
     input:
         "split_stat_read1.log"
     output:
@@ -159,10 +182,11 @@ rule frag_denovo_merge:
         get_bc_contigs
     output:
         "rna_16s/frag_denovo/all.contigs_max.fasta"
-    shell:
-        """
-        cat {input} > {output}
-        """
+    run:
+        with open(output[0], "w") as out:
+            for path in input:
+                with open(path) as handle:
+                    out.write(handle.read())
 
 
 # ============================================================================
@@ -238,7 +262,7 @@ rule abundance_meta_denovo:
 
 rule abundance_align_ref:
     input:
-        bam=f"Align/{SAMPLE_ID}.sort.bam"
+        bam=f"Align/{SAMPLE_ID}.sort.removedup_rm000.bam"
     output:
         csv="rna_16s/align_ref/abundance_align_ref.csv",
         png="rna_16s/align_ref/abundance_align_ref.png"
@@ -246,9 +270,11 @@ rule abundance_align_ref:
         python=PYTHON,
         script=SCRIPT_DIR + '/align_ref.py',
         outdir="rna_16s/align_ref",
-        ref_fasta=REF_16S
+        ref_fasta=REF_16S,
+        samtools=SAMTOOLS
     shell:
         """
         {params.python} {params.script} --bam {input.bam} \
-            --outdir {params.outdir} --ref_fasta {params.ref_fasta}
+            --outdir {params.outdir} --ref_fasta {params.ref_fasta} \
+            --samtools {params.samtools}
         """

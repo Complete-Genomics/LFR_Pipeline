@@ -11,12 +11,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--bam", type=str, required=True, help="Input BAM file")
 parser.add_argument("--ref_fasta", type=str, required=True, help="Reference FASTA file")
 parser.add_argument("--outdir", type=str, required=True, help="Output directory")
+parser.add_argument("--samtools", type=str, default="samtools", help="Path to samtools")
 args = parser.parse_args()
 
 # ---------------- 配置部分 ----------------
 bam_file = args.bam
 ref_fasta = args.ref_fasta
 outdir = args.outdir
+samtools = args.samtools
 Path(outdir).mkdir(parents=True, exist_ok=True)
 
 output_csv = f"{outdir}/abundance_align_ref.csv"
@@ -52,7 +54,7 @@ def extract_species_from_fasta(fasta_path):
 
 # ---------------- 主流程 ----------------
 print("Step 1: Running samtools idxstats...")
-idxstats_output = subprocess.check_output(["samtools", "idxstats", bam_file]).decode().strip()
+idxstats_output = subprocess.check_output([samtools, "idxstats", bam_file]).decode().strip()
 
 # 解析 idxstats 输出
 # 格式: ref_name   ref_length   mapped_reads   unmapped_reads
