@@ -142,20 +142,21 @@ rule run_denovo_parallel:
         src_dir = config['params']['src_dir']
     run:
         # chunk to run on mutiple nodes, or a dummy number 300000000 to run on single node
-        params.end_idx = config['frag_de_novo']['end_idx']
-        params.start_idx = config['frag_de_novo']['start_idx']
+        params.end_idx = config['frag_de_novo'].get('end_idx')
+        params.start_idx = config['frag_de_novo'].get('start_idx', 0)
         command = ["{params.python}",
                    "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
                    "--num_processes {params.num_processes} ",
                    "--sequence_type {params.sequence_type} ",
                    "--n_line_chunk 2000000 ",
                    "--start_idx {params.start_idx} ",
-                   "--end_idx {params.end_idx} ",
                    "--module denovo_parallel ",
                    "--min_ctg_len {params.min_ctg_len} ",
                    "--megahit {params.megahit} ",
                    "--rg {params.rg} ",
                    "--nth_of_nodes 0"]
+        if params.end_idx not in (None, "", "all"):
+            command.append("--end_idx {params.end_idx} ")
         shell(" ".join(command))
 
 rule map_denovo:

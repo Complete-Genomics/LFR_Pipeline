@@ -167,8 +167,8 @@ frag_de_novo:
     quast_space_efficient: True
     minimap: "/path/to/minimap2"
     denovo_type: 'correct_rc'
-    end_idx: 485000000
-    start_idx: 1
+    end_idx:
+    start_idx: 0
     flank_end: 30
     adapter_seq: "CTCAGCAGAGGG"
     min_ctg_len: 400

@@ -34,7 +34,7 @@ parser.add_argument("--k_min", type=int, required=False)
 parser.add_argument("--k_max", type=int, required=False)
 parser.add_argument("--min_ctg_len", type=int, required=False)
 parser.add_argument("--n_line_chunk", type=int, required=False)
-parser.add_argument("--start_idx", type=int, required=False)
+parser.add_argument("--start_idx", type=int, default=0, required=False)
 parser.add_argument("--end_idx", type=int, required=False)
 parser.add_argument("--module", type=str)
 parser.add_argument("--num_node", type=int, required=False)
@@ -271,6 +271,11 @@ def create_bins(start_idx, end_idx, bin_size):
         bins.append([i, min(i + bin_size, end_idx)])
     return bins
 
+def count_sgrep_lines():
+    file_path = f'denovo/{NAME}2_sgrep.tsv'
+    with open(file_path, 'r') as f:
+        return sum(1 for _ in f)
+
 def parse_bc_fasta(in_fasta):
     bc_len = 15
 
@@ -310,6 +315,11 @@ if __name__ == "__main__":
         #     os.mkdir(f'denovo/{BATCH_LANE}_{ID}')
 
         subprocess.call(f'mkdir -p /dev/shm/{BATCH_LANE}_{ID}', shell=True)
+        if end_idx is None:
+            end_idx = count_sgrep_lines()
+            print(f'end_idx not specified; using all reads: end_idx={end_idx}')
+        if end_idx <= start_idx:
+            raise SystemExit(f"Invalid denovo range: start_idx={start_idx}, end_idx={end_idx}")
         bins = create_bins(start_idx, end_idx, n_line_chunk)
 
         if sequence_type == 'pe':
@@ -340,5 +350,4 @@ if __name__ == "__main__":
         parse_bc_fasta(in_fasta)
     else:
         print('module not found')
-
 
