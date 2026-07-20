@@ -43,6 +43,8 @@ def preprocess(dirname, read_len, num_bin_in_frag, minreads, processNline=None):
     bc_df = pd.read_csv(infile_bc_df, **read_csv_kwargs)
     bc_df.Positions = bc_df.Positions.apply(literal_eval)
     bc_df.Cigar_match = bc_df.Cigar_match.apply(literal_eval)
+    if 'Strand' not in bc_df.columns:
+        bc_df['Strand'] = 1
     bc_df = bc_df[bc_df['N_Reads'] >= minreads]
     
     # Calculate reads_covered_fragment_percent and frag_mean_depth from Positions

@@ -40,6 +40,8 @@ def preprocess(dirname, read_len, num_bin_in_frag, minreads):
     bc_df.Positions=bc_df.Positions.apply(literal_eval)
     # bc_df.Strand=bc_df.Strand.apply(literal_eval)
     bc_df.Cigar_match = bc_df.Cigar_match.apply(literal_eval)
+    if 'Strand' not in bc_df.columns:
+        bc_df['Strand'] = 1
     bc_df = bc_df[bc_df['N_Reads']>=minreads]
     return bc_df
 

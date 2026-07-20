@@ -273,7 +273,7 @@ def manipulate_df_gaps(test_barcodes, min_frag, max_frag, min_reads, read_len):
 def write_out_tsv_and_summary1(test_barcodes, dirname, write_out_tsv, min_reads, plot_cutoff):
     # Write a small preview artifact for Snakemake/downstream checks without
     # materializing the full fragment dataframe.
-    columns = ['Chrom', 'Positions', 'Frag_Length', 'Cigar_match', 'Barcode', 'N_Reads']
+    columns = ['Chrom', 'Positions', 'Frag_Length', 'Strand', 'Cigar_match', 'Barcode', 'N_Reads']
     df = test_barcodes.reindex(columns=columns).head(100)
     df.to_csv(f"{dirname}/frag_and_bc_dataframe.tsv", sep='\t', index=False)
 
