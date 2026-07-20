@@ -168,11 +168,16 @@ rule map_denovo:
         minimap = config['params']['minimap2'],
         refgenome = config['params']['ref_fa_mrna']
     run:
-        command = ["{params.minimap} -x asm20 -t 20 ",
+        if config['frag_de_novo']['denovo_type'] == 'correct_rc':
+            command = ["{params.minimap} -x asm20 -t 20 ",
                    "{params.refgenome} ",
                    "denovo/final_contigs_0.fa > {output} "
                    ] 
-        shell(" ".join(command))
+            shell(" ".join(command))
+        else:
+            shell("touch denovo/denovo.paf")
+
+
 
 
 rule correc_direction_denovo:
