@@ -41,7 +41,7 @@ parser.add_argument("--num_node", type=int, required=False)
 parser.add_argument("--nth_of_nodes", type=int, required=False)
 parser.add_argument('--debug', action='store_true', default=False, help='Enable debug mode')
 parser.add_argument("--megahit", type=str, default='megahit', help='Path to megahit binary')
-parser.add_argument("--rg", type=str, default='rg', help='Path to rg (ripgrep) binary')
+# parser.add_argument("--rg", type=str, default='rg', help='Path to rg (ripgrep) binary')
 
 
 args = parser.parse_args()
@@ -59,14 +59,14 @@ start_idx = args.start_idx
 end_idx = args.end_idx
 ID = args.nth_of_nodes
 MEGAHIT = args.megahit
-RG = args.rg
+# RG = args.rg
 
 def process_barcode_se(barcode, shared_meta_data2, lock):
     K_MIN = 41
     K_MAX = 41
     MIN_CTG_LEN = 400
     megahit = MEGAHIT
-    rg = RG
+    # rg = RG
 
     try:
         # Create in-memory files for R1 and R2 using io.BytesIO
