@@ -156,15 +156,37 @@ rule ercc_count:
             shell("featureCounts -T 64 -a {params.ercc_gtf} -g gene_id -o Align/ercc_count.txt Align/data.sort.markdup.bam && sed -i '1,1d' Align/ercc_count.txt")
 
 
+rule ercc_bam:
+    input:
+        bam = "Align/data.sort.removedup_rm000.bam",
+        bai = "Align/data.sort.removedup_rm000.bam.bai"
+    output:
+        bam = "Align/ercc.bam",
+        bai = "Align/ercc.bam.bai"
+    params:
+        samtools = config['params'].get('samtools', 'samtools'),
+        ercc_truth = config['params']['src_dir'] + "/modules/clfr/calc_frag_len/ercc_truth.txt"
+    shell:
+        """
+        awk 'NR > 1 {{print $2}}' {params.ercc_truth} | \
+            xargs {params.samtools} view -b {input.bam} > {output.bam}
+        {params.samtools} index {output.bam} {output.bai}
+        """
+
+
 rule ercc_plot:
     input:
-        cnt = "Align/ercc_count.txt",
-        frag_bc_df = "Calc_Frag_Length_{}/frag_and_bc_dataframe.tsv".format(config['calc_frag']['split_dist'][0]),
+        bam = "Align/ercc.bam",
     output:
-        "Align/ercc_count_ratio.txt"
+        ratio = "Align/ercc_count_ratio.txt",
+        correlation = "Align/ercc_count_ratio_correlation.txt",
+        reads_plot = "Align/ercc_count_ratio_mapped_reads_count.png",
+        normalized_plot = "Align/ercc_count_ratio_count_normalized.png",
+        barcode_plot = "Align/ercc_count_ratio_mapped_barcode_count.png",
+        summary_plot = "Align/ercc_count_ratio_summary.png"
     params:
         src_dir = config['params']['src_dir'],
         python = config['params']['general_python'],
         ercc_ref_gc = config['params']['src_dir'] + "/modules/clfr/calc_frag_len/ercc_truth.txt"
     shell:
-        "{params.python} {params.src_dir}/modules/clfr/calc_frag_len/ercc_count.py --ercc_count {input.cnt} --ercc_ref {params.ercc_ref_gc} --frag_bc_df {input.frag_bc_df} --output {output}"
+        "{params.python} {params.src_dir}/modules/clfr/calc_frag_len/ercc_count.py --ercc_bam {input.bam} --ercc_ref {params.ercc_ref_gc} --output {output.ratio}"
