@@ -273,8 +273,12 @@ else:
     raise ValueError("Either --ercc_bam or --ercc_count is required")
 df_out = df_truth.merge(df_counts, on='ERCC ID', how='left')
 
+if 'Length' not in df_out.columns:
+    df_out['Length'] = np.nan
 if 'size' in df_out.columns:
     df_out['Length'] = df_out['Length'].fillna(pd.to_numeric(df_out['size'], errors='coerce'))
+if 'mapped_reads_count' not in df_out.columns:
+    df_out['mapped_reads_count'] = 0
 df_out['mapped_reads_count'] = df_out['mapped_reads_count'].fillna(0)
 df_out['Length'] = pd.to_numeric(df_out['Length'], errors='coerce')
 df_out['count_normalized'] = df_out['mapped_reads_count'] / df_out['Length'].replace(0, np.nan)
