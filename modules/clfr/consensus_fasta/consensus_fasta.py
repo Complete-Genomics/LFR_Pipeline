@@ -192,6 +192,20 @@ def initialize_fasta_ref(ref_path):
                 raise
         _fasta_ref_file = pysam.FastaFile(ref_path)
 
+def resolve_contig_name(contig, valid_names):
+    """Return contig name as it appears in a BAM/FASTA reference list."""
+    valid_names = set(valid_names)
+    candidates = [contig]
+    if contig.startswith("chr"):
+        candidates.append(contig[3:])
+    else:
+        candidates.append("chr" + contig)
+
+    for candidate in candidates:
+        if candidate in valid_names:
+            return candidate
+    return contig
+
 def get_umi_from_read_id(read_id):
     """
     Extract UMI from read ID (format: Vxxx#UMI_id)
@@ -351,12 +365,8 @@ def get_2bp_sequence_pysam(chrom, start, end):
     """Extract 2bp sequences from start and end of a region using pysam.FastaFile."""
     if _fasta_ref_file is None:
         raise RuntimeError("Reference FASTA file not initialized for pysam.")
-    
-    # Ensure chromosome naming matches the FASTA reference.
-    # Assuming the FASTA reference has 'chr' prefix (e.g., 'chr22').
-    # If not, you might need to convert chrom here or modify the FASTA index.
-    if not chrom.startswith('chr'):
-        chrom = 'chr' + chrom
+
+    chrom = resolve_contig_name(chrom, _fasta_ref_file.references)
 
     try:
         # Pysam.fetch(contig, start, end) -> 0-based start, 0-based end-exclusive
@@ -395,6 +405,12 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     if not bed_lines:
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no valid BED regions, skipping.\n")
         return None
+
+    header_contigs = [
+        sq.get("SN")
+        for sq in header_dict_data.get("SQ", [])
+        if sq.get("SN")
+    ]
 
     # Create temp BAM for Samtools consensus
     temp_bam_path = None # Initialize to None for finally block
@@ -438,10 +454,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     consensus_start = int(start_0based) + 2 # +1 for 1-based, +2 for clipping
                     consensus_end = int(end_1based) - 2 # -2 for clipping
                     
-                    # Determine correct chromosome name for samtools consensus
-                    samtools_chrom = chrom
-                    if not samtools_chrom.startswith('chr'):
-                        samtools_chrom = 'chr' + samtools_chrom
+                    samtools_chrom = resolve_contig_name(chrom, header_contigs)
 
                 except (ValueError, IndexError) as e:
                     sys.stderr.write(f"Error parsing BED line (UMI {umi_id}): {line}, Error: {e}\n")
