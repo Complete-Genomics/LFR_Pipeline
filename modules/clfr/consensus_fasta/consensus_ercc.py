@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Summarize ERCC consensus FASTA length recovery and variants.
+"""Summarize ERCC consensus FASTA length recovery and variants from PAF.
 
-The script compares cLFR consensus FASTA records against ERCC truth sequences.
-It reports how much of the original ERCC length each consensus recovers and
-whether the consensus isoform carries SNPs/indels relative to the ERCC reference.
+Use an existing minimap2 PAF when available. For exact SNP/indel positions,
+generate PAF with minimap2 --cs=long. Without cs tags, the script still reports
+alignment coverage and NM mismatch/edit distance when present, but cannot list
+per-base variants.
 """
 
 from __future__ import print_function
@@ -16,42 +17,28 @@ import sys
 
 
 ERCC_RE = re.compile(r"(ERCC-\d+)")
+CS_RE = re.compile(r"(:[0-9]+|\*[a-z][a-z]|\+[a-z]+|-[a-z]+|=[a-z]+|~[a-z]{2}[0-9]+[a-z]{2})")
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fasta", required=True, help="Consensus FASTA file.")
-    parser.add_argument(
-        "--ercc_ref",
-        default=None,
-        help="ERCC truth table with columns 'ERCC ID' and 'Sequence'.",
-    )
-    parser.add_argument(
-        "--summary",
-        default="consensus/consensus_ercc_summary.tsv",
-        help="Output per-consensus summary TSV.",
-    )
-    parser.add_argument(
-        "--variants",
-        default="consensus/consensus_ercc_variants.tsv",
-        help="Output per-variant TSV.",
-    )
-    parser.add_argument("--match", type=int, default=2)
-    parser.add_argument("--mismatch", type=int, default=-1)
-    parser.add_argument("--gap", type=int, default=-2)
+    parser.add_argument("--paf", default="consensus/consensus.paf", help="minimap2 PAF for the consensus FASTA.")
+    parser.add_argument("--ercc_ref", default=None, help="ERCC truth table with 'ERCC ID' and 'Sequence'.")
+    parser.add_argument("--summary", default="consensus/consensus_ercc_summary.tsv")
+    parser.add_argument("--variants", default="consensus/consensus_ercc_variants.tsv")
     return parser.parse_args()
 
 
 def default_ercc_ref():
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.abspath(
-        os.path.join(here, "..", "calc_frag_len", "ercc_truth.txt")
-    )
+    return os.path.abspath(os.path.join(here, "..", "calc_frag_len", "ercc_truth.txt"))
 
 
-def read_fasta(path):
+def read_fasta_lengths(path):
+    lengths = {}
     name = None
-    seq_chunks = []
+    length = 0
     with open(path) as handle:
         for line in handle:
             line = line.strip()
@@ -59,13 +46,14 @@ def read_fasta(path):
                 continue
             if line.startswith(">"):
                 if name is not None:
-                    yield name, "".join(seq_chunks).upper()
+                    lengths[name] = length
                 name = line[1:].split()[0]
-                seq_chunks = []
+                length = 0
             else:
-                seq_chunks.append(line)
+                length += len(line)
     if name is not None:
-        yield name, "".join(seq_chunks).upper()
+        lengths[name] = length
+    return lengths
 
 
 def read_ercc_truth(path):
@@ -82,165 +70,113 @@ def read_ercc_truth(path):
     return refs
 
 
-def ercc_from_header(header):
-    match = ERCC_RE.search(header)
+def ercc_from_text(text):
+    match = ERCC_RE.search(text)
     return match.group(1) if match else None
 
 
-def kmer_score(query, ref, k=15):
-    if len(query) < k or len(ref) < k:
-        return 0
-    kmers = set(query[i:i + k] for i in range(0, len(query) - k + 1, k))
-    return sum(1 for i in range(0, len(ref) - k + 1, k) if ref[i:i + k] in kmers)
+def parse_tags(fields):
+    tags = {}
+    for field in fields[12:]:
+        parts = field.split(":", 2)
+        if len(parts) == 3:
+            tags[parts[0]] = parts[2]
+    return tags
 
 
-def choose_reference(header, query, refs):
-    ercc_id = ercc_from_header(header)
-    if ercc_id in refs:
-        return ercc_id
-    return max(refs, key=lambda ref_id: kmer_score(query, refs[ref_id]))
+def read_best_ercc_paf(path, ercc_refs):
+    best = {}
+    with open(path) as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 12:
+                continue
+            query = fields[0]
+            target = fields[5]
+            ercc_id = ercc_from_text(target) or ercc_from_text(query)
+            if ercc_id not in ercc_refs:
+                continue
+            record = {
+                "query": query,
+                "query_len": int(fields[1]),
+                "query_start": int(fields[2]),
+                "query_end": int(fields[3]),
+                "strand": fields[4],
+                "target": target,
+                "target_len": int(fields[6]),
+                "target_start": int(fields[7]),
+                "target_end": int(fields[8]),
+                "matches": int(fields[9]),
+                "block_len": int(fields[10]),
+                "mapq": int(fields[11]),
+                "tags": parse_tags(fields),
+                "ercc_id": ercc_id,
+            }
+            old = best.get(query)
+            if old is None or (record["matches"], record["block_len"], record["mapq"]) > (
+                old["matches"], old["block_len"], old["mapq"]
+            ):
+                best[query] = record
+    return best
 
 
-def smith_waterman(ref, query, match_score, mismatch_score, gap_score):
-    """Local alignment of query consensus to reference.
-
-    Trace codes:
-      0 stop, 1 diag, 2 up/ref gap in query, 3 left/query insertion.
-    """
-    n_ref = len(ref)
-    n_query = len(query)
-    prev = [0] * (n_query + 1)
-    trace = [bytearray(n_query + 1) for _ in range(n_ref + 1)]
-    max_score = 0
-    max_i = 0
-    max_j = 0
-
-    for i in range(1, n_ref + 1):
-        curr = [0] * (n_query + 1)
-        ref_base = ref[i - 1]
-        for j in range(1, n_query + 1):
-            query_base = query[j - 1]
-            diag = prev[j - 1] + (match_score if ref_base == query_base else mismatch_score)
-            up = prev[j] + gap_score
-            left = curr[j - 1] + gap_score
-            best = max(0, diag, up, left)
-            curr[j] = best
-            if best == 0:
-                trace[i][j] = 0
-            elif best == diag:
-                trace[i][j] = 1
-            elif best == up:
-                trace[i][j] = 2
-            else:
-                trace[i][j] = 3
-            if best > max_score:
-                max_score = best
-                max_i = i
-                max_j = j
-        prev = curr
-
-    ops = []
-    i = max_i
-    j = max_j
-    while i > 0 and j > 0 and trace[i][j] != 0:
-        code = trace[i][j]
-        if code == 1:
-            ops.append(("M", i - 1, j - 1))
-            i -= 1
-            j -= 1
-        elif code == 2:
-            ops.append(("D", i - 1, None))
-            i -= 1
-        elif code == 3:
-            ops.append(("I", None, j - 1))
-            j -= 1
-    ops.reverse()
-    return {
-        "score": max_score,
-        "ops": ops,
-        "ref_start": i + 1,
-        "ref_end": max_i,
-        "query_start": j + 1,
-        "query_end": max_j,
-    }
-
-
-def summarize_alignment(header, ercc_id, ref, query, aln):
+def count_variants_from_cs(query, ercc_id, cs, target_start, strand):
     variants = []
     snp_count = 0
     ins_count = 0
     del_count = 0
-    n_count = query.count("N")
-    aligned_ref_bases = 0
-    aligned_query_bases = 0
+    ref_pos = target_start + 1
 
-    for op, ref_idx, query_idx in aln["ops"]:
-        if op == "M":
-            aligned_ref_bases += 1
-            aligned_query_bases += 1
-            ref_base = ref[ref_idx]
-            query_base = query[query_idx]
-            if ref_base != query_base:
-                if query_base == "N":
-                    variant_type = "ambiguous_N"
-                else:
-                    variant_type = "snp"
-                    snp_count += 1
-                variants.append({
-                    "consensus_id": header,
-                    "ercc_id": ercc_id,
-                    "variant_type": variant_type,
-                    "ref_pos_1based": ref_idx + 1,
-                    "ref_base": ref_base,
-                    "consensus_base": query_base,
-                })
-        elif op == "D":
-            aligned_ref_bases += 1
-            del_count += 1
+    for token in CS_RE.findall(cs):
+        op = token[0]
+        payload = token[1:]
+        if op == ":":
+            ref_pos += int(payload)
+        elif op == "=":
+            ref_pos += len(payload)
+        elif op == "*":
+            ref_base = payload[0].upper()
+            query_base = payload[1].upper()
+            snp_count += 1
             variants.append({
-                "consensus_id": header,
+                "consensus_id": query,
                 "ercc_id": ercc_id,
-                "variant_type": "deletion",
-                "ref_pos_1based": ref_idx + 1,
-                "ref_base": ref[ref_idx],
-                "consensus_base": "-",
+                "variant_type": "snp",
+                "ref_pos_1based": ref_pos,
+                "ref_base": ref_base,
+                "consensus_base": query_base,
+                "strand": strand,
             })
-        elif op == "I":
-            aligned_query_bases += 1
-            ins_count += 1
+            ref_pos += 1
+        elif op == "+":
+            ins_count += len(payload)
             variants.append({
-                "consensus_id": header,
+                "consensus_id": query,
                 "ercc_id": ercc_id,
                 "variant_type": "insertion",
-                "ref_pos_1based": "",
+                "ref_pos_1based": ref_pos,
                 "ref_base": "-",
-                "consensus_base": query[query_idx],
+                "consensus_base": payload.upper(),
+                "strand": strand,
             })
+        elif op == "-":
+            del_count += len(payload)
+            variants.append({
+                "consensus_id": query,
+                "ercc_id": ercc_id,
+                "variant_type": "deletion",
+                "ref_pos_1based": ref_pos,
+                "ref_base": payload.upper(),
+                "consensus_base": "-",
+                "strand": strand,
+            })
+            ref_pos += len(payload)
+        elif op == "~":
+            match = re.match(r"[a-z]{2}([0-9]+)[a-z]{2}", payload)
+            if match:
+                ref_pos += int(match.group(1))
 
-    ref_len = len(ref)
-    query_len = len(query)
-    summary = {
-        "consensus_id": header,
-        "ercc_id": ercc_id,
-        "ref_len": ref_len,
-        "consensus_len": query_len,
-        "consensus_len_pct_ref": 100.0 * query_len / ref_len if ref_len else 0,
-        "aligned_ref_bases": aligned_ref_bases,
-        "aligned_ref_pct": 100.0 * aligned_ref_bases / ref_len if ref_len else 0,
-        "aligned_query_bases": aligned_query_bases,
-        "alignment_score": aln["score"],
-        "ref_start_1based": aln["ref_start"],
-        "ref_end_1based": aln["ref_end"],
-        "query_start_1based": aln["query_start"],
-        "query_end_1based": aln["query_end"],
-        "snp_count": snp_count,
-        "insertion_count": ins_count,
-        "deletion_count": del_count,
-        "ambiguous_N_count": n_count,
-        "has_snp": "yes" if snp_count > 0 else "no",
-        "has_indel": "yes" if (ins_count + del_count) > 0 else "no",
-    }
-    return summary, variants
+    return snp_count, ins_count, del_count, variants
 
 
 def write_table(path, rows, fieldnames):
@@ -257,37 +193,76 @@ def write_table(path, rows, fieldnames):
 def main():
     args = parse_args()
     ercc_ref = args.ercc_ref or default_ercc_ref()
-    refs = read_ercc_truth(ercc_ref)
+    ercc_refs = read_ercc_truth(ercc_ref)
+    fasta_lengths = read_fasta_lengths(args.fasta)
+    best_paf = read_best_ercc_paf(args.paf, ercc_refs)
+
     summaries = []
     variants = []
+    missing_cs = 0
+    for query, record in sorted(best_paf.items()):
+        ercc_id = record["ercc_id"]
+        ref_len = len(ercc_refs[ercc_id])
+        consensus_len = fasta_lengths.get(query, record["query_len"])
+        aligned_ref_bases = record["target_end"] - record["target_start"]
+        aligned_query_bases = record["query_end"] - record["query_start"]
+        nm = record["tags"].get("NM", "")
+        cs = record["tags"].get("cs")
 
-    for header, query in read_fasta(args.fasta):
-        ercc_id = choose_reference(header, query, refs)
-        aln = smith_waterman(
-            refs[ercc_id],
-            query,
-            match_score=args.match,
-            mismatch_score=args.mismatch,
-            gap_score=args.gap,
-        )
-        summary, record_variants = summarize_alignment(header, ercc_id, refs[ercc_id], query, aln)
-        summaries.append(summary)
-        variants.extend(record_variants)
+        snp_count = ""
+        ins_count = ""
+        del_count = ""
+        if cs:
+            snp_count, ins_count, del_count, record_variants = count_variants_from_cs(
+                query, ercc_id, cs, record["target_start"], record["strand"]
+            )
+            variants.extend(record_variants)
+        else:
+            missing_cs += 1
+
+        summaries.append({
+            "consensus_id": query,
+            "ercc_id": ercc_id,
+            "ref_len": ref_len,
+            "consensus_len": consensus_len,
+            "consensus_len_pct_ref": 100.0 * consensus_len / ref_len if ref_len else 0,
+            "aligned_ref_bases": aligned_ref_bases,
+            "aligned_ref_pct": 100.0 * aligned_ref_bases / ref_len if ref_len else 0,
+            "aligned_query_bases": aligned_query_bases,
+            "query_aligned_pct": 100.0 * aligned_query_bases / consensus_len if consensus_len else 0,
+            "matches": record["matches"],
+            "block_len": record["block_len"],
+            "mapq": record["mapq"],
+            "strand": record["strand"],
+            "target_start_1based": record["target_start"] + 1,
+            "target_end_1based": record["target_end"],
+            "nm": nm,
+            "snp_count": snp_count,
+            "insertion_count": ins_count,
+            "deletion_count": del_count,
+            "has_snp": "yes" if snp_count != "" and snp_count > 0 else ("unknown" if snp_count == "" else "no"),
+            "has_indel": "yes" if ins_count != "" and (ins_count + del_count) > 0 else ("unknown" if ins_count == "" else "no"),
+        })
 
     summary_fields = [
         "consensus_id", "ercc_id", "ref_len", "consensus_len", "consensus_len_pct_ref",
-        "aligned_ref_bases", "aligned_ref_pct", "aligned_query_bases", "alignment_score",
-        "ref_start_1based", "ref_end_1based", "query_start_1based", "query_end_1based",
-        "snp_count", "insertion_count", "deletion_count", "ambiguous_N_count",
-        "has_snp", "has_indel",
+        "aligned_ref_bases", "aligned_ref_pct", "aligned_query_bases", "query_aligned_pct",
+        "matches", "block_len", "mapq", "strand", "target_start_1based", "target_end_1based",
+        "nm", "snp_count", "insertion_count", "deletion_count", "has_snp", "has_indel",
     ]
     variant_fields = [
         "consensus_id", "ercc_id", "variant_type", "ref_pos_1based",
-        "ref_base", "consensus_base",
+        "ref_base", "consensus_base", "strand",
     ]
     write_table(args.summary, summaries, summary_fields)
     write_table(args.variants, variants, variant_fields)
-    sys.stderr.write("Wrote %s consensus summaries and %s variants.\n" % (
+
+    if missing_cs:
+        sys.stderr.write(
+            "WARNING: %s PAF records do not have cs tags; exact SNP/indel positions are unknown. "
+            "Regenerate PAF with minimap2 --cs=long to enable variant calls.\n" % missing_cs
+        )
+    sys.stderr.write("Wrote %s ERCC consensus summaries and %s variants.\n" % (
         len(summaries), len(variants)
     ))
 
