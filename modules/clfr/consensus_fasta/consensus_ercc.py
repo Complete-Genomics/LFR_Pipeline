@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--ercc_ref", default=None, help="ERCC truth table with 'ERCC ID' and 'Sequence'.")
     parser.add_argument("--summary", default="consensus/consensus_ercc_summary.tsv")
     parser.add_argument("--variants", default="consensus/consensus_ercc_variants.tsv")
+    parser.add_argument("--length_stats", default="consensus/consensus_ercc_length_stats.tsv")
     return parser.parse_args()
 
 
@@ -190,6 +191,35 @@ def write_table(path, rows, fieldnames):
             writer.writerow(row)
 
 
+def length_pct_stats(summaries):
+    values = sorted(float(row["consensus_len_pct_ref"]) for row in summaries)
+    if not values:
+        return {
+            "metric": "consensus_len_pct_ref",
+            "count": 0,
+            "mean": "",
+            "median": "",
+            "min": "",
+            "max": "",
+        }
+
+    count = len(values)
+    middle = count // 2
+    if count % 2:
+        median = values[middle]
+    else:
+        median = (values[middle - 1] + values[middle]) / 2.0
+
+    return {
+        "metric": "consensus_len_pct_ref",
+        "count": count,
+        "mean": sum(values) / count,
+        "median": median,
+        "min": values[0],
+        "max": values[-1],
+    }
+
+
 def main():
     args = parse_args()
     ercc_ref = args.ercc_ref or default_ercc_ref()
@@ -256,13 +286,18 @@ def main():
     ]
     write_table(args.summary, summaries, summary_fields)
     write_table(args.variants, variants, variant_fields)
+    write_table(
+        args.length_stats,
+        [length_pct_stats(summaries)],
+        ["metric", "count", "mean", "median", "min", "max"],
+    )
 
     if missing_cs:
         sys.stderr.write(
             "WARNING: %s PAF records do not have cs tags; exact SNP/indel positions are unknown. "
             "Regenerate PAF with minimap2 --cs=long to enable variant calls.\n" % missing_cs
         )
-    sys.stderr.write("Wrote %s ERCC consensus summaries and %s variants.\n" % (
+    sys.stderr.write("Wrote %s ERCC consensus summaries, %s variants, and length stats.\n" % (
         len(summaries), len(variants)
     ))
 
