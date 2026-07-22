@@ -113,12 +113,12 @@ EMPTY_CONSENSUS_COUNT = 0
 
 # MIN_READS = 50
 # 使用一个唯一的临时目录，确保不会与其他进程冲突
-TEMP_BASE_DIR = "/dev/shm"
+TEMP_BASE_DIR = f"/dev/shm/minimap_tmp_{os.getpid()}"
 TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
 FALLBACK_TEMP_DIR = "/tmp"
 
 def make_temp_dir(chrom, split_index, batch_id):
-    for base_dir in ("/dev/shm/consensus", os.path.join(tempfile.gettempdir(), "consensus")):
+    for base_dir in (os.path.join(TEMP_BASE_DIR, "consensus"), os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")):
         temp_dir = (
             os.path.join(base_dir, batch_id, f"{chrom}_{split_index}")
             if batch_id else os.path.join(base_dir, f"{chrom}_{split_index}")
