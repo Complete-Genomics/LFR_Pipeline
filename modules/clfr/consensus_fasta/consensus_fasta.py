@@ -112,8 +112,7 @@ log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENS
 EMPTY_CONSENSUS_COUNT = 0
 
 # MIN_READS = 50
-# 使用一个唯一的临时目录，确保不会与其他进程冲突
-TEMP_BASE_DIR = f"/dev/shm/minimap_tmp_{os.getpid()}"
+TEMP_BASE_DIR = f"/dev/shm/consensus_tmp_{os.getpid()}"
 TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
 FALLBACK_TEMP_DIR = "/tmp"
 
