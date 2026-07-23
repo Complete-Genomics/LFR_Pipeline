@@ -247,7 +247,44 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_conti
         # and a genuinely separate fragment among the rest still gets a shot
         pool = [s for i, s in enumerate(pool) if i not in used]
 
-    return contigs
+    return _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k)
+
+
+def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k):
+    """
+    Post-process the contig list from one UMI: the outer loop in
+    assemble_umi builds each contig from a single greedy pass, so a read
+    that "missed" merging on one pass (e.g. its bridging partner was
+    already claimed) can end up starting a second, spurious contig that
+    actually belongs to the same fragment as an earlier one. Two cases:
+
+    1. Genuine boundary overlap (one contig's end matches another's
+       start) -- these get merged into one longer contig via the same
+       suffix/prefix extension logic used for raw reads (a contig is
+       just a longer sequence).
+    2. Pure internal containment (one contig sits entirely inside
+       another, not at either edge -- suffix_prefix_overlap only checks
+       boundaries so it won't catch this) -- the contained one adds no
+       new sequence, so it's simply dropped.
+    """
+    if len(contigs) <= 1:
+        return contigs
+
+    # 1. merge any pair with a real boundary overlap
+    pool = sorted(set(contigs), key=lambda s: (-len(s), s))
+    merged = []
+    while pool:
+        contig, used = _extend_one_contig(pool, min_ov, max_mm, seed_k)
+        merged.append(contig)
+        pool = [s for i, s in enumerate(pool) if i not in used]
+
+    # 2. drop pure containment (substring anywhere, not just at a boundary)
+    merged.sort(key=len, reverse=True)
+    final = []
+    for c in merged:
+        if not any(c != kept and c in kept for kept in final):
+            final.append(c)
+    return final
 
 
 # ── post-assembly polish (majority-vote consensus correction) ─────────────────
