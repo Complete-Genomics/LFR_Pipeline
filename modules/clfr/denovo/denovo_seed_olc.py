@@ -157,17 +157,74 @@ def suffix_prefix_overlap(a, b, min_ov, max_mm, seed_k=10):
 
 # ── assembler ─────────────────────────────────────────────────────────────────
 
-def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10):
+def _extend_one_contig(pool, min_ov, max_mm, seed_k):
+    """
+    Build a single greedy-extended contig from the longest remaining read
+    in `pool` (a list of sequences). Returns (contig, used_indices) where
+    used_indices always includes at least the seed's own index -- so the
+    caller can remove them from the pool and make progress even when the
+    seed fails to extend at all (a singleton/orphan read).
+    """
+    contig = pool[0]
+    used = {0}
+    unused = list(range(1, len(pool)))
+
+    changed = True
+    while changed and unused:
+        changed = False
+        for i in list(unused):
+            seq = pool[i]
+            extended = False
+
+            for cand in (seq, rc(seq)):
+                # try extending contig at 3' end
+                ov = suffix_prefix_overlap(contig, cand, min_ov, max_mm, seed_k)
+                if ov:
+                    contig += cand[ov:]
+                    unused.remove(i)
+                    used.add(i)
+                    changed = True
+                    extended = True
+                    break
+
+                # try extending contig at 5' end
+                ov = suffix_prefix_overlap(cand, contig, min_ov, max_mm, seed_k)
+                if ov:
+                    contig = cand + contig[ov:]
+                    unused.remove(i)
+                    used.add(i)
+                    changed = True
+                    extended = True
+                    break
+
+            if extended:
+                # restart scan so new contig ends are retried against all unused
+                break
+
+    return contig, used
+
+
+def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_contigs=4):
     """
     Greedy seed-extension assembly for one UMI's reads.
 
-    seqs    : list of DNA sequences (forward strand, no quality)
-    min_ov  : minimum overlap length to merge two reads [20]
-    max_mm  : maximum mismatch rate in overlap region [0.05]
-    min_ctg : discard contigs shorter than this [400]
-    seed_k  : k-mer length for overlap pre-filter [10]
+    A barcode can genuinely carry reads from more than one physical DNA
+    fragment (barcode reuse/collision is a known stLFR/cLFR reality) --
+    megahit's de Bruijn graph naturally splits into multiple connected
+    components in that case, one contig per fragment. This loops the
+    same greedy seed-extension over whatever reads are left after each
+    contig, so it does the same instead of silently discarding every
+    read that didn't merge into the first (longest) seed's chain.
 
-    Returns list of contig sequences (usually 0 or 1 per UMI).
+    seqs        : list of DNA sequences (forward strand, no quality)
+    min_ov      : minimum overlap length to merge two reads [20]
+    max_mm      : maximum mismatch rate in overlap region [0.05]
+    min_ctg     : discard contigs shorter than this [400]
+    seed_k      : k-mer length for overlap pre-filter [10]
+    max_contigs : stop after this many accepted contigs [4] (matches
+                  _write_contigs' existing per-barcode cap)
+
+    Returns list of contig sequences (0 or more per UMI).
     """
     if not seqs:
         return []
@@ -178,41 +235,19 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10):
     # randomization, so without this, inputs with many same-length reads
     # (e.g. fixed-length test data) would pick a different, effectively
     # random seed read -- and thus a different assembly -- on every rerun.
-    uniq = sorted(set(seqs), key=lambda s: (-len(s), s))
-    contig = uniq[0]
-    unused = list(range(1, len(uniq)))
+    pool = sorted(set(seqs), key=lambda s: (-len(s), s))
 
-    changed = True
-    while changed and unused:
-        changed = False
-        for i in list(unused):
-            seq = uniq[i]
-            extended = False
+    contigs = []
+    while pool and len(contigs) < max_contigs:
+        contig, used = _extend_one_contig(pool, min_ov, max_mm, seed_k)
+        if len(contig) >= min_ctg:
+            contigs.append(contig)
+        # always drop every read the attempt consumed (even just the seed
+        # itself, on a failed/orphan attempt) so the pool strictly shrinks
+        # and a genuinely separate fragment among the rest still gets a shot
+        pool = [s for i, s in enumerate(pool) if i not in used]
 
-            for cand in (seq, rc(seq)):
-                # try extending contig at 3' end
-                ov = suffix_prefix_overlap(contig, cand, min_ov, max_mm, seed_k)
-                if ov:
-                    contig += cand[ov:]
-                    unused.remove(i)
-                    changed = True
-                    extended = True
-                    break
-
-                # try extending contig at 5' end
-                ov = suffix_prefix_overlap(cand, contig, min_ov, max_mm, seed_k)
-                if ov:
-                    contig = cand + contig[ov:]
-                    unused.remove(i)
-                    changed = True
-                    extended = True
-                    break
-
-            if extended:
-                # restart scan so new contig ends are retried against all unused
-                break
-
-    return [contig] if len(contig) >= min_ctg else []
+    return contigs
 
 
 # ── post-assembly polish (majority-vote consensus correction) ─────────────────
