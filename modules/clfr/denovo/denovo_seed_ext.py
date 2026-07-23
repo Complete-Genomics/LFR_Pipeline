@@ -52,11 +52,29 @@ Benchmark only, no pipeline side effects (run from Snakemake work dir)
 
 Output printed:
     per-UMI latency, throughput (UMI/s), contig yield, 1M/3M extrapolation
+
+Polish step (post-assembly majority-vote consensus correction)
+------------------------------------------------------------------
+Borrows the "majority vote per position" idea from
+cgi/pipeline/tests/dev/LFR_pipeline/src/sparse_denovo_trasm's CallArray
+pileup, without its k-mer-index / numpy / homopolymer machinery.
+
+After assemble_umi() (or the mappy path) produces a draft contig,
+polish_contig() re-aligns every UMI read against it via a cheap k-mer
+offset vote (no full DP alignment), tallies per-position base votes,
+and flips a position only when an alternative base out-votes the
+original (which starts with 1 implicit vote) by >= vote_concordance
+with >= min_coverage total votes. Corrects substitution errors from
+the single-read greedy merge; does NOT handle indels (e.g. homopolymer
+length errors) -- a read with an indel relative to the contig simply
+fails the concordance check and is excluded from voting rather than
+corrupting the consensus. On by default; disable with
+configure(polish=False) or CLI --no_polish.
 """
 
 import itertools
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 # ── module-level config (set via configure() before multiprocessing) ──────────
 
@@ -68,11 +86,17 @@ _CFG = {
     "out_file":  "denovo/final_contigs_{id}.fa",
     "seed_k":    10,    # k-mer size for overlap pre-filter
     "use_mappy": None,  # None = auto-detect, True/False = force
+    "polish":              True,  # majority-vote consensus correction after assembly
+    "polish_min_coverage": 3,     # min total votes (incl. 1 implicit vote for original base) to consider flipping
+    "polish_vote_concordance": 0.6,  # winning base must hold >= this fraction of votes to flip
+    "polish_kmer_step":    5,     # stride for sampling k-mers when re-aligning reads to the contig
 }
 
 
 def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
-              out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=None):
+              out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=None,
+              polish=True, polish_min_coverage=3, polish_vote_concordance=0.6,
+              polish_kmer_step=5):
     """Call once in the parent process before spawning Pool workers."""
     _CFG["min_ctg"]   = min_ctg_len
     _CFG["min_ov"]    = min_overlap
@@ -80,6 +104,10 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
     _CFG["out_id"]    = out_id
     _CFG["out_file"]  = out_file
     _CFG["use_mappy"] = use_mappy
+    _CFG["polish"]                   = polish
+    _CFG["polish_min_coverage"]      = polish_min_coverage
+    _CFG["polish_vote_concordance"]  = polish_vote_concordance
+    _CFG["polish_kmer_step"]         = polish_kmer_step
 
 
 # ── sequence utilities ────────────────────────────────────────────────────────
@@ -144,8 +172,13 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10):
     if not seqs:
         return []
 
-    # deduplicate, sort longest-first -> longest read is seed
-    uniq = sorted(set(seqs), key=len, reverse=True)
+    # deduplicate, sort longest-first -> longest read is seed.
+    # Secondary sort key (the string itself) makes tie-breaking deterministic:
+    # set() iteration order depends on Python's per-process string hash
+    # randomization, so without this, inputs with many same-length reads
+    # (e.g. fixed-length test data) would pick a different, effectively
+    # random seed read -- and thus a different assembly -- on every rerun.
+    uniq = sorted(set(seqs), key=lambda s: (-len(s), s))
     contig = uniq[0]
     unused = list(range(1, len(uniq)))
 
@@ -180,6 +213,94 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10):
                 break
 
     return [contig] if len(contig) >= min_ctg else []
+
+
+# ── post-assembly polish (majority-vote consensus correction) ─────────────────
+
+def polish_contig(contig, seqs, min_ov=20, max_mm=0.05, seed_k=10,
+                   min_coverage=3, vote_concordance=0.6, kmer_step=5):
+    """
+    Correct substitution errors in a draft contig via per-position majority
+    vote across the UMI's reads, borrowing the idea from sparse_denovo_trasm's
+    CallArray pileup (see module docstring) without its k-mer-index / numpy /
+    homopolymer machinery.
+
+    Re-aligns each read against the contig with a cheap k-mer offset vote
+    (no full DP): sample k-mers from the read, look up matching positions in
+    a one-time contig k-mer index, and take the most common implied offset.
+    Reads/orientations that don't clear max_mm over the resulting overlap are
+    skipped. Surviving reads cast one vote per covered position; the contig's
+    own base gets 1 implicit vote so a single dissenting read can't flip
+    anything. A position flips only when the alternative base reaches
+    >= vote_concordance of >= min_coverage total votes.
+
+    Substitution-only, like assemble_umi's overlap check: an indel-bearing
+    read (e.g. homopolymer-length error) fails the concordance check for
+    everything downstream of the indel and is simply excluded from voting,
+    rather than corrupting the consensus.
+
+    Returns the polished contig (same length as input; only base
+    substitutions, no indels are ever introduced by this step).
+    """
+    n = len(contig)
+    if n == 0 or not seqs:
+        return contig
+
+    k = seed_k
+    contig_kmers = defaultdict(list)
+    for i in range(0, n - k + 1):
+        contig_kmers[contig[i:i + k]].append(i)
+
+    votes = [None] * n  # lazy per-position Counter
+
+    for raw in seqs:
+        for cand in (raw, rc(raw)):
+            L = len(cand)
+            if L < min_ov:
+                continue
+
+            offset_counts = {}
+            for j in range(0, L - k + 1, kmer_step):
+                for pos in contig_kmers.get(cand[j:j + k], ()):
+                    off = pos - j
+                    offset_counts[off] = offset_counts.get(off, 0) + 1
+            if not offset_counts:
+                continue
+
+            best_offset = max(offset_counts, key=offset_counts.get)
+
+            read_start = max(0, -best_offset)
+            contig_start = max(0, best_offset)
+            overlap_len = min(L - read_start, n - contig_start)
+            if overlap_len < min_ov:
+                continue
+
+            read_region = cand[read_start:read_start + overlap_len]
+            contig_region = contig[contig_start:contig_start + overlap_len]
+            mismatches = sum(x != y for x, y in zip(contig_region, read_region))
+            if mismatches / overlap_len > max_mm:
+                continue
+
+            for idx in range(overlap_len):
+                pos = contig_start + idx
+                if votes[pos] is None:
+                    votes[pos] = Counter()
+                votes[pos][read_region[idx]] += 1
+            break  # this orientation aligned; don't also try the RC of the same read
+
+    polished = list(contig)
+    for i, counter in enumerate(votes):
+        if counter is None:
+            continue
+        counter[contig[i]] += 1  # original base's implicit vote
+        total = sum(counter.values())
+        if total < min_coverage:
+            continue
+        base, cnt = counter.most_common(1)[0]
+        if base != contig[i] and cnt / total >= vote_concordance:
+            polished[i] = base
+
+    return "".join(polished)
 
 
 # ── optional mappy fast path ──────────────────────────────────────────────────
@@ -275,6 +396,20 @@ def _seqs_from_meta(meta, barcode):
     return entries[1::2]
 
 
+def _polish_all(contigs, seqs, min_ov, max_mm, seed_k):
+    if not contigs or not _CFG["polish"]:
+        return contigs
+    return [
+        polish_contig(
+            c, seqs, min_ov=min_ov, max_mm=max_mm, seed_k=seed_k,
+            min_coverage=_CFG["polish_min_coverage"],
+            vote_concordance=_CFG["polish_vote_concordance"],
+            kmer_step=_CFG["polish_kmer_step"],
+        )
+        for c in contigs
+    ]
+
+
 def process_barcode_se(barcode, shared_meta_data2, lock):
     """SE drop-in for denovo_clfr_ram.process_barcode_se."""
     min_ctg  = _CFG["min_ctg"]
@@ -294,6 +429,7 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     if contigs is None:
         contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
 
+    contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
 
 
@@ -318,6 +454,7 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     if contigs is None:
         contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
 
+    contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
 
 
@@ -470,10 +607,13 @@ def _main_cli():
     ap.add_argument("--n", type=int, default=None,
                     help="only assemble the first N UMIs total, across all chunks "
                          "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")
+    ap.add_argument("--no_polish", action="store_true",
+                    help="skip post-assembly majority-vote consensus correction (on by default)")
     args = ap.parse_args()
 
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
-              max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes)
+              max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
+              polish=not args.no_polish)
 
     if not os.path.isdir("denovo"):
         os.makedirs("denovo")
@@ -596,6 +736,21 @@ def _run_selftest():
     ctg_rc = assemble_umi([r1, r2], min_ov=30, min_ctg=200)
     print("[RC ext]   reads=2  contig_len={}".format(len(ctg_rc[0]) if ctg_rc else 0))
 
+    # polish: corrupt a correctly-assembled contig at one position, verify
+    # majority vote from the (uncorrupted) reads flips it back
+    reads_dense = _make_reads(FRAG, 150, 15)  # dense overlap -> high per-position coverage
+    ctg_dense = assemble_umi(reads_dense, min_ctg=400)
+    polish_ok = False
+    if ctg_dense and ctg_dense[0] in FRAG:
+        good_contig = ctg_dense[0]
+        err_pos = len(good_contig) // 2
+        wrong_base = "ACGT"[("ACGT".index(good_contig[err_pos]) + 1) % 4]
+        corrupted = good_contig[:err_pos] + wrong_base + good_contig[err_pos + 1:]
+        polished = polish_contig(corrupted, reads_dense, min_ov=20, max_mm=0.05, seed_k=10,
+                                  min_coverage=3, vote_concordance=0.6, kmer_step=5)
+        polish_ok = (polished == good_contig) or (polished[err_pos] == good_contig[err_pos])
+    print("[polish]   corrected={}".format(polish_ok))
+
     ok = True
     if not ctg_hi or (ctg_hi[0] not in FRAG and FRAG not in ctg_hi[0]):
         print("FAIL: hi-depth contig does not match fragment", file=sys.stderr)
@@ -605,6 +760,9 @@ def _run_selftest():
         ok = False
     if not ctg_rc or len(ctg_rc[0]) < 350:
         print("FAIL: RC extension too short ({})".format(len(ctg_rc[0]) if ctg_rc else 0), file=sys.stderr)
+        ok = False
+    if not polish_ok:
+        print("FAIL: polish did not correct the injected substitution error", file=sys.stderr)
         ok = False
     if ok:
         print("correctness: OK")
