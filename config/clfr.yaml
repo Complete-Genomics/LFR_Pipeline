@@ -165,7 +165,9 @@ frag_de_novo:
     flank_end: 30
     adapter_seq: "CTCAGCAGAGGG"
     min_ctg_len: 400
-    num_processes: 20
+    num_processes: 30
+    assembler: seedext   # megahit | seedext (pure-Python OLC, no subprocess fork)
+    assembly_N_umi:      # empty = denovo all UMIs; set an int to cap for debug/smoke test
 
 umi:
     umi_pos_strand_batch: ""

@@ -139,22 +139,39 @@ rule run_denovo_parallel:
         k_max = 41,
         megahit = config['params']['megahit'],
         tmp_dir = config['frag_de_novo'].get('tmp_dir', '/dev/shm'),
+        assembler = config['frag_de_novo'].get('assembler', 'megahit'),
+        n_umi = config['frag_de_novo'].get('assembly_N_umi'),
         src_dir = config['params']['src_dir']
     run:
         # chunk to run on mutiple nodes, or a dummy number 300000000 to run on single node
         params.end_idx = config['frag_de_novo'].get('end_idx')
         params.start_idx = config['frag_de_novo'].get('start_idx', 0)
-        command = ["{params.python}",
-                   "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
-                   "--num_processes {params.num_processes} ",
-                   "--sequence_type {params.sequence_type} ",
-                   "--n_line_chunk 2000000 ",
-                   "--start_idx {params.start_idx} ",
-                   "--module denovo_parallel ",
-                   "--min_ctg_len {params.min_ctg_len} ",
-                   "--megahit {params.megahit} ",
-                   "--tmp_dir {params.tmp_dir} ",
-                   "--nth_of_nodes 0"]
+
+        if params.assembler == 'seedext':
+            # pure-Python OLC assembler, no megahit / no subprocess fork per UMI
+            command = ["{params.python}",
+                       "{params.src_dir}/modules/clfr/denovo/denovo_seed_ext.py",
+                       "--num_processes {params.num_processes} ",
+                       "--sequence_type {params.sequence_type} ",
+                       "--n_line_chunk 2000000 ",
+                       "--start_idx {params.start_idx} ",
+                       "--min_ctg_len {params.min_ctg_len} ",
+                       "--nth_of_nodes 0"]
+            if params.n_umi not in (None, "", "all"):
+                command.append("--n {params.n_umi} ")
+        else:
+            command = ["{params.python}",
+                       "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
+                       "--num_processes {params.num_processes} ",
+                       "--sequence_type {params.sequence_type} ",
+                       "--n_line_chunk 2000000 ",
+                       "--start_idx {params.start_idx} ",
+                       "--module denovo_parallel ",
+                       "--min_ctg_len {params.min_ctg_len} ",
+                       "--megahit {params.megahit} ",
+                       "--tmp_dir {params.tmp_dir} ",
+                       "--nth_of_nodes 0"]
+
         if params.end_idx not in (None, "", "all"):
             command.append("--end_idx {params.end_idx} ")
         shell(" ".join(command))
