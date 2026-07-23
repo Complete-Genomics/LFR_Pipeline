@@ -18,17 +18,50 @@ no changes: header = >{barcode}k41_0, first 15 chars = barcode.
 No required dependencies - pure Python stdlib (Python >= 3.6).
 Optional: pip install mappy  ->  faster overlap via minimap2 C engine.
 
-Drop-in API
------------
-Replace process_barcode_se / process_barcode_pe in denovo_clfr_ram.py:
+Self-test
+---------
+    python3 denovo_seed_ext.py
 
-    from denovo_seed_ext import configure, process_barcode_se, process_barcode_pe
+Drop-in usage in denovo_clfr_ram.py
+-------------------------------------
+Step 1: import at the top of denovo_clfr_ram.py
 
-    # call once before Pool
-    configure(min_ctg_len=MIN_CTG_LEN, out_id=ID)
+    from denovo_seed_ext import (configure as _se_configure,
+                                 process_barcode_se as _se_process_se,
+                                 process_barcode_pe as _se_process_pe)
 
-    pool.starmap(process_barcode_se,
-                 [(bc, shared_meta2, lock) for bc in meta_data2])
+Step 2: call configure() once, before Pool is created (still in __main__):
+
+    _se_configure(
+        min_ctg_len = MIN_CTG_LEN,   # e.g. 400
+        out_id      = ID,             # nth_of_nodes, used in output filename
+    )
+    os.makedirs('denovo', exist_ok=True)
+
+Step 3: swap process_barcode_se / process_barcode_pe calls:
+
+    # SE mode  (original used megahit subprocess)
+    pool.starmap(_se_process_se,
+                 [(bc, shared_meta_data2, lock) for bc in meta_data2.keys()])
+
+    # PE mode
+    pool.starmap(_se_process_pe,
+                 [(bc, shared_meta_data1, shared_meta_data2, lock)
+                  for bc in meta_data2.keys()])
+
+    # num_processes=1 path (no Pool):
+    for bc in meta_data2.keys():
+        _se_process_se(bc, meta_data2, lock)   # plain dict works too
+
+Benchmark (run from Snakemake work dir)
+----------------------------------------
+    python3 /path/to/benchmark_seedext.py \\
+        --n 1000 \\
+        --r2 denovo/data_R2_sgrep.tsv \\
+        --min_ctg 400
+
+Output printed:
+    per-UMI latency, throughput (UMI/s), contig yield, 1M/3M extrapolation
 """
 
 import threading
