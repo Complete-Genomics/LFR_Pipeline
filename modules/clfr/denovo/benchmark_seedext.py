@@ -33,7 +33,7 @@ from denovo_seed_ext import assemble_umi
 BC_START = 5
 BC_LEN   = 15
 
-meta: dict[str, list[str]] = defaultdict(list)
+meta = defaultdict(list)
 r2_path = args.r2
 
 if not os.path.exists(r2_path):
@@ -65,7 +65,7 @@ print(f"Loaded {len(barcodes)} UMIs  "
 # ── benchmark ─────────────────────────────────────────────────────────────────
 n_contigs = 0
 n_empty   = 0
-contig_lens: list[int] = []
+contig_lens = []
 
 t0 = time.perf_counter()
 for bc in barcodes:
