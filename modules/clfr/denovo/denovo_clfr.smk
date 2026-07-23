@@ -32,7 +32,7 @@ rule select_denovo_barcodes:
 rule filter_reads1:
     input:
         barcode_freq="denovo/filtered_barcode_freq.txt",
-        read="data/split_read.1.fq.gz"
+        read="data/split_read_1_trimmed.fastq.gz"
     output:
         "denovo/data_R1_filtered.fastq.gz"
     params:
@@ -48,7 +48,7 @@ rule filter_reads1:
 rule filter_reads2:
     input:
         barcode_freq="denovo/filtered_barcode_freq.txt",
-        read="data/split_read.2.fq.gz"
+        read="data/split_read_2_trimmed.fastq.gz"
     output:
         "denovo/data_R2_filtered.fastq.gz"
     params:
