@@ -88,14 +88,17 @@ rule reformat_fasta1:
     output:
         "denovo/data_R1_sgrep.tsv"
     params:
-        sequence_type = config['params']['sequence_type'].lower()
+        sequence_type = config['params']['sequence_type'].lower(),
+        sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
+        sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')
     shell:
         """
+        mkdir -p {params.sort_tmp_dir}
         if [[ "{params.sequence_type}" == "pe" ]]; then
             zcat {input} | \
             awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
             awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
-            sort -T /tmp/ -S 60% > {output}
+            LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
         elif [[ "{params.sequence_type}" == "se" ]]; then
             touch denovo/data_R1_sgrep.tsv
         else
@@ -109,12 +112,16 @@ rule reformat_fasta2:
         "denovo/data_R2_filtered.fastq.gz"
     output:
         "denovo/data_R2_sgrep.tsv"
+    params:
+        sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
+        sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')
     shell:
         """
+        mkdir -p {params.sort_tmp_dir}
         zcat {input} | \
         awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
         awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
-        sort -T /tmp/ -S 60% > {output}
+        LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
         """
 
 def count_fq_len():
