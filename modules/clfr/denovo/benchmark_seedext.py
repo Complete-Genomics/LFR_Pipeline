@@ -87,7 +87,7 @@ for bc in barcodes:
         contig_lens.extend(len(c) for c in ctgs)
         if out_fh:
             for i, seq in enumerate(ctgs):
-                out_fh.write(">{}k41_{} len={} reads={}\n{}\n".format(
+                out_fh.write(">{}>k41_{} len={} reads={}\n{}\n".format(
                     bc, i, len(seq), len(seqs), seq))
     else:
         n_empty += 1

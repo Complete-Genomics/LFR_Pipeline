@@ -13,48 +13,38 @@ Algorithm - greedy Overlap-Layout-Consensus:
 Minimum viable depth: 1 read (seed only) -> contig if >= min_ctg bp.
 
 Output format matches megahit convention so denovo_supp.py requires
-no changes: header = >{barcode}k41_0, first 15 chars = barcode.
+no changes: header = >{barcode}>k41_0, first 15 chars = barcode.
 
 No required dependencies - pure Python stdlib (Python >= 3.6).
 Optional: pip install mappy  ->  faster overlap via minimap2 C engine.
 
-Self-test
----------
+Self-test (no args)
+-------------------
     python3 denovo_seed_ext.py
 
-Drop-in usage in denovo_clfr_ram.py
--------------------------------------
-Step 1: import at the top of denovo_clfr_ram.py
+Standalone CLI (drop-in replacement for denovo_clfr_ram.py --module denovo_parallel)
+-------------------------------------------------------------------------------------
+Run directly from a Snakemake work dir containing denovo/data_R1_sgrep.tsv
+and denovo/data_R2_sgrep.tsv (same layout denovo_clfr_ram.py expects).
+No megahit binary, no tmp_dir, no subprocess fork per UMI.
 
-    from denovo_seed_ext import (configure as _se_configure,
-                                 process_barcode_se as _se_process_se,
-                                 process_barcode_pe as _se_process_pe)
+    python3 denovo_seed_ext.py \\
+        --sequence_type se \\
+        --num_processes 30 \\
+        --n_line_chunk 2000000 \\
+        --min_ctg_len 400 \\
+        --nth_of_nodes 0 \\
+        --n 1000            # optional: only assemble first 1000 UMIs (config: assembly_N_umi); omit/empty = all UMIs
 
-Step 2: call configure() once, before Pool is created (still in __main__):
+Writes contigs to denovo/final_contigs_{nth_of_nodes}.fa and touches
+denovo/frag_denovo_done, matching denovo_clfr_ram.py's output contract
+so downstream rules (map_denovo, correc_direction_denovo, ...) need no changes.
 
-    _se_configure(
-        min_ctg_len = MIN_CTG_LEN,   # e.g. 400
-        out_id      = ID,             # nth_of_nodes, used in output filename
-    )
-    os.makedirs('denovo', exist_ok=True)
+See denovo_clfr.smk rule run_denovo_parallel for the branch that invokes
+this script directly when frag_de_novo.assembler == 'seedext'.
 
-Step 3: swap process_barcode_se / process_barcode_pe calls:
-
-    # SE mode  (original used megahit subprocess)
-    pool.starmap(_se_process_se,
-                 [(bc, shared_meta_data2, lock) for bc in meta_data2.keys()])
-
-    # PE mode
-    pool.starmap(_se_process_pe,
-                 [(bc, shared_meta_data1, shared_meta_data2, lock)
-                  for bc in meta_data2.keys()])
-
-    # num_processes=1 path (no Pool):
-    for bc in meta_data2.keys():
-        _se_process_se(bc, meta_data2, lock)   # plain dict works too
-
-Benchmark (run from Snakemake work dir)
-----------------------------------------
+Benchmark only, no pipeline side effects (run from Snakemake work dir)
+------------------------------------------------------------------------
     python3 /path/to/benchmark_seedext.py \\
         --n 1000 \\
         --r2 denovo/data_R2_sgrep.tsv \\
@@ -64,7 +54,8 @@ Output printed:
     per-UMI latency, throughput (UMI/s), contig yield, 1M/3M extrapolation
 """
 
-import threading
+import itertools
+import os
 from collections import defaultdict
 
 # ── module-level config (set via configure() before multiprocessing) ──────────
@@ -258,14 +249,15 @@ def _assemble_umi_mappy(seqs, min_ctg):
 def _write_contigs(barcode, contigs, out_file, lock):
     """
     Append contigs to final_contigs_{id}.fa.
-    Header: >{barcode}k41_{i}  (first 15 chars = barcode,
-    matching denovo_supp.py record.id[:CBC_LEN]).
+    Header: >{barcode}>k41_{i}  (first 15 chars = barcode,
+    matching denovo_supp.py record.id[:CBC_LEN]; second '>' marks the
+    barcode/UMI boundary, matching megahit-path convention).
     """
     if not contigs:
         return
     lines = []
     for i, seq in enumerate(contigs[:4]):   # max 4 per UMI, same as megahit path
-        lines.append(">{bk41}_{i}\n{seq}\n".format(bk41=barcode + "k41", i=i, seq=seq))
+        lines.append(">{barcode}>k41_{i}\n{seq}\n".format(barcode=barcode, i=i, seq=seq))
     block = "".join(lines)
     with lock:
         with open(out_file, "a") as fh:
@@ -329,9 +321,247 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     _write_contigs(barcode, contigs, out_file, lock)
 
 
+# ── sgrep TSV parsing (same format as denovo_clfr_ram.add_sgrep_line) ──────────
+
+def _add_sgrep_line(meta_data, line):
+    """
+    Parse one line of denovo/data_R{1,2}_sgrep.tsv into meta_data[barcode].
+    Line format: <readname>\\t<seq>, readname[5:20] = 15-char barcode.
+    Appends '>id' then 'seq' so meta_data[bc] = ['>id0','seq0','>id1','seq1',...],
+    matching denovo_clfr_ram.py's convention exactly.
+    """
+    bc_len = 15
+    info = line.rstrip("\n").split("\t")
+    if len(info) < 2:
+        return False
+    bc = info[0][5:5 + bc_len]
+    rid = ">" + info[0][22:]
+    seq = info[1]
+    meta_data[bc].append(rid)
+    meta_data[bc].append(seq)
+    return True
+
+
+def _iter_se_chunks(r2_path, start_idx, n_line_chunk):
+    with open(r2_path) as f:
+        for _ in itertools.islice(f, start_idx):
+            pass
+        chunk_start = start_idx
+        while True:
+            meta_data2 = defaultdict(list)
+            n_lines = 0
+            for line in itertools.islice(f, n_line_chunk):
+                if _add_sgrep_line(meta_data2, line):
+                    n_lines += 1
+            if n_lines == 0:
+                break
+            yield chunk_start, meta_data2
+            chunk_start += n_lines
+
+
+def _iter_pe_chunks(r1_path, r2_path, start_idx, n_line_chunk):
+    with open(r1_path) as f1, open(r2_path) as f2:
+        for _ in itertools.islice(f1, start_idx):
+            pass
+        for _ in itertools.islice(f2, start_idx):
+            pass
+        chunk_start = start_idx
+        while True:
+            meta_data1 = defaultdict(list)
+            meta_data2 = defaultdict(list)
+            n_lines = 0
+            for line1, line2 in itertools.islice(zip(f1, f2), n_line_chunk):
+                ok1 = _add_sgrep_line(meta_data1, line1)
+                ok2 = _add_sgrep_line(meta_data2, line2)
+                if ok1 and ok2:
+                    n_lines += 1
+            if n_lines == 0:
+                break
+            yield chunk_start, meta_data1, meta_data2
+            chunk_start += n_lines
+
+
+def _create_bins(start_idx, end_idx, bin_size):
+    bins_ = []
+    for i in range(start_idx, end_idx, bin_size):
+        bins_.append((i, min(i + bin_size, end_idx)))
+    return bins_
+
+
+def _limit_umis(meta_data, remaining):
+    """
+    Keep at most `remaining` barcodes from meta_data (dict insertion order).
+    Returns (possibly-truncated meta_data, number of barcodes kept).
+    remaining=None means no limit.
+    """
+    if remaining is None or len(meta_data) <= remaining:
+        return meta_data, len(meta_data)
+    limited = defaultdict(list)
+    for i, bc in enumerate(meta_data.keys()):
+        if i >= remaining:
+            break
+        limited[bc] = meta_data[bc]
+    return limited, len(limited)
+
+
+class _NullLock(object):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+def _process_pe_metadata(meta_data1, meta_data2, num_processes):
+    if num_processes == 1:
+        lock = _NullLock()
+        for barcode in meta_data2.keys():
+            process_barcode_pe(barcode, meta_data1, meta_data2, lock)
+    else:
+        import multiprocessing as mp
+        with mp.Manager() as manager:
+            shared1 = manager.dict(meta_data1)
+            shared2 = manager.dict(meta_data2)
+            lock = manager.Lock()
+            with mp.Pool(num_processes) as pool:
+                pool.starmap(process_barcode_pe,
+                             [(bc, shared1, shared2, lock) for bc in meta_data2.keys()])
+    print("denovo_BC_counts={}".format(len(meta_data2)))
+    return sum(len(v) // 2 for v in meta_data2.values())
+
+
+def _process_se_metadata(meta_data2, num_processes):
+    if num_processes == 1:
+        lock = _NullLock()
+        for barcode in meta_data2.keys():
+            process_barcode_se(barcode, meta_data2, lock)
+    else:
+        import multiprocessing as mp
+        with mp.Manager() as manager:
+            shared2 = manager.dict(meta_data2)
+            lock = manager.Lock()
+            with mp.Pool(num_processes) as pool:
+                pool.starmap(process_barcode_se,
+                             [(bc, shared2, lock) for bc in meta_data2.keys()])
+    print("denovo_BC_counts={}".format(len(meta_data2)))
+    return sum(len(v) // 2 for v in meta_data2.values())
+
+
+# ── standalone pipeline CLI ───────────────────────────────────────────────────
+
+def _main_cli():
+    import argparse
+    import datetime
+    import subprocess
+
+    ap = argparse.ArgumentParser(
+        description="Standalone per-UMI seed-extension assembler (no megahit, no subprocess fork)")
+    ap.add_argument("--sequence_type", choices=["se", "pe"], required=True)
+    ap.add_argument("--num_processes", type=int, default=1)
+    ap.add_argument("--n_line_chunk", type=int, default=2000000)
+    ap.add_argument("--start_idx", type=int, default=0)
+    ap.add_argument("--end_idx", type=int, default=None)
+    ap.add_argument("--min_ctg_len", type=int, default=400)
+    ap.add_argument("--min_overlap", type=int, default=20)
+    ap.add_argument("--max_mismatch", type=float, default=0.05)
+    ap.add_argument("--nth_of_nodes", type=int, default=0)
+    ap.add_argument("--r1", type=str, default="denovo/data_R1_sgrep.tsv")
+    ap.add_argument("--r2", type=str, default="denovo/data_R2_sgrep.tsv")
+    ap.add_argument("--n", type=int, default=None,
+                    help="only assemble the first N UMIs total, across all chunks "
+                         "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")
+    args = ap.parse_args()
+
+    configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
+              max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes)
+
+    if not os.path.isdir("denovo"):
+        os.makedirs("denovo")
+
+    print("start={}".format(datetime.datetime.now()), flush=True)
+    if args.n is not None:
+        print("assembly_N_umi={} (denovo limited to first N UMIs)".format(args.n), flush=True)
+    processed_umi = 0
+
+    if args.end_idx is None:
+        print("end_idx not specified; streaming all reads from start_idx={}".format(args.start_idx),
+              flush=True)
+        if args.sequence_type == "pe":
+            for chunk_start, m1, m2 in _iter_pe_chunks(args.r1, args.r2, args.start_idx, args.n_line_chunk):
+                if args.n is not None:
+                    remaining = args.n - processed_umi
+                    if remaining <= 0:
+                        break
+                    m2, kept = _limit_umis(m2, remaining)
+                    m1 = defaultdict(list, {bc: m1[bc] for bc in m2.keys()})
+                else:
+                    kept = len(m2)
+                print("processing chunk start_idx={} reads={}".format(
+                    chunk_start, sum(len(v) // 2 for v in m2.values())), flush=True)
+                _process_pe_metadata(m1, m2, args.num_processes)
+                processed_umi += kept
+                if args.n is not None and processed_umi >= args.n:
+                    break
+        else:
+            for chunk_start, m2 in _iter_se_chunks(args.r2, args.start_idx, args.n_line_chunk):
+                if args.n is not None:
+                    remaining = args.n - processed_umi
+                    if remaining <= 0:
+                        break
+                    m2, kept = _limit_umis(m2, remaining)
+                else:
+                    kept = len(m2)
+                print("processing chunk start_idx={} reads={}".format(
+                    chunk_start, sum(len(v) // 2 for v in m2.values())), flush=True)
+                _process_se_metadata(m2, args.num_processes)
+                processed_umi += kept
+                if args.n is not None and processed_umi >= args.n:
+                    break
+    else:
+        if args.end_idx <= args.start_idx:
+            raise SystemExit("Invalid denovo range: start_idx={} end_idx={}".format(
+                args.start_idx, args.end_idx))
+        bins_ = _create_bins(args.start_idx, args.end_idx, args.n_line_chunk)
+        if args.sequence_type == "pe":
+            for s, e in bins_:
+                if args.n is not None and processed_umi >= args.n:
+                    break
+                m1, m2 = defaultdict(list), defaultdict(list)
+                with open(args.r1) as f1, open(args.r2) as f2:
+                    for line1, line2 in itertools.islice(zip(f1, f2), s, e):
+                        _add_sgrep_line(m1, line1)
+                        _add_sgrep_line(m2, line2)
+                if args.n is not None:
+                    m2, kept = _limit_umis(m2, args.n - processed_umi)
+                    m1 = defaultdict(list, {bc: m1[bc] for bc in m2.keys()})
+                else:
+                    kept = len(m2)
+                _process_pe_metadata(m1, m2, args.num_processes)
+                processed_umi += kept
+        else:
+            for s, e in bins_:
+                if args.n is not None and processed_umi >= args.n:
+                    break
+                m2 = defaultdict(list)
+                with open(args.r2) as f2:
+                    for line in itertools.islice(f2, s, e):
+                        _add_sgrep_line(m2, line)
+                if args.n is not None:
+                    m2, kept = _limit_umis(m2, args.n - processed_umi)
+                else:
+                    kept = len(m2)
+                _process_se_metadata(m2, args.num_processes)
+                processed_umi += kept
+
+    if args.n is not None:
+        print("total_umi_assembled={}".format(processed_umi), flush=True)
+    print("end={}".format(datetime.datetime.now()), flush=True)
+    subprocess.call("touch denovo/frag_denovo_done", shell=True)
+
+
 # ── CLI self-test ─────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def _run_selftest():
     import sys
     import random
 
@@ -378,3 +608,11 @@ if __name__ == "__main__":
         ok = False
     if ok:
         print("correctness: OK")
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 1:
+        _run_selftest()
+    else:
+        _main_cli()
