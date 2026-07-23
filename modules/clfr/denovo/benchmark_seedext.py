@@ -1,11 +1,18 @@
 """
-Benchmark denovo_seed_ext.assemble_umi on real data.
+Benchmark + smoke-test denovo_seed_ext.assemble_umi on real data.
 
 Usage (run from the Snakemake work dir that contains denovo/data_R2_sgrep.tsv):
 
-    python3 /path/to/benchmark_seedext.py [--n 1000] [--r2 denovo/data_R2_sgrep.tsv]
+    # timing only
+    python3 /path/to/benchmark_seedext.py --n 1000 --r2 denovo/data_R2_sgrep.tsv
 
-Prints: per-UMI latency, throughput, contig yield.
+    # smoke test: write FASTA and inspect
+    python3 /path/to/benchmark_seedext.py --n 100 --r2 denovo/data_R2_sgrep.tsv \\
+        --output smoke_contigs.fa
+    grep -c '>' smoke_contigs.fa          # count contigs
+    awk '/^>/{next}{print length}' smoke_contigs.fa | sort -n  # contig lengths
+
+Prints: per-UMI latency, throughput, contig yield, 1M/3M extrapolation.
 """
 
 import argparse
@@ -22,6 +29,8 @@ parser.add_argument("--r2", type=str, default="denovo/data_R2_sgrep.tsv",
                     help="path to sgrep TSV (R2) [denovo/data_R2_sgrep.tsv]")
 parser.add_argument("--min_ctg", type=int, default=400)
 parser.add_argument("--min_ov",  type=int, default=20)
+parser.add_argument("--output",  type=str, default=None,
+                    help="write assembled contigs to this FASTA file (smoke test)")
 args = parser.parse_args()
 
 # ── import assembler ──────────────────────────────────────────────────────────
@@ -62,10 +71,12 @@ print(f"Loaded {len(barcodes)} UMIs  "
       f"max={max(len(meta[b]) for b in barcodes)}, "
       f"mean={sum(len(meta[b]) for b in barcodes)/len(barcodes):.1f})")
 
-# ── benchmark ─────────────────────────────────────────────────────────────────
+# ── benchmark + optional FASTA output ────────────────────────────────────────
 n_contigs = 0
 n_empty   = 0
 contig_lens = []
+
+out_fh = open(args.output, "w") if args.output else None
 
 t0 = time.perf_counter()
 for bc in barcodes:
@@ -74,9 +85,17 @@ for bc in barcodes:
     if ctgs:
         n_contigs += len(ctgs)
         contig_lens.extend(len(c) for c in ctgs)
+        if out_fh:
+            for i, seq in enumerate(ctgs):
+                out_fh.write(">{}k41_{} len={} reads={}\n{}\n".format(
+                    bc, i, len(seq), len(seqs), seq))
     else:
         n_empty += 1
 elapsed = time.perf_counter() - t0
+
+if out_fh:
+    out_fh.close()
+    print("FASTA written to: {}  ({} contigs)".format(args.output, n_contigs))
 
 # ── report ────────────────────────────────────────────────────────────────────
 n = len(barcodes)
