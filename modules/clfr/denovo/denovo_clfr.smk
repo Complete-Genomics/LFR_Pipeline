@@ -150,7 +150,7 @@ rule run_denovo_parallel:
         if params.assembler == 'seedext':
             # pure-Python OLC assembler, no megahit / no subprocess fork per UMI
             command = ["{params.python}",
-                       "{params.src_dir}/modules/clfr/denovo/denovo_seed_ext.py",
+                       "{params.src_dir}/modules/clfr/denovo/denovo_seed_olc.py",
                        "--num_processes {params.num_processes} ",
                        "--sequence_type {params.sequence_type} ",
                        "--n_line_chunk 2000000 ",

@@ -1,5 +1,5 @@
 """
-Benchmark + smoke-test denovo_seed_ext.assemble_umi on real data.
+Benchmark + smoke-test denovo_seed_olc.assemble_umi on real data.
 
 Usage (run from the Snakemake work dir that contains denovo/data_R2_sgrep.tsv):
 
@@ -36,7 +36,7 @@ args = parser.parse_args()
 # ── import assembler ──────────────────────────────────────────────────────────
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
-from denovo_seed_ext import assemble_umi
+from denovo_seed_olc import assemble_umi
 
 # ── load first N barcodes from sgrep TSV ─────────────────────────────────────
 BC_START = 5

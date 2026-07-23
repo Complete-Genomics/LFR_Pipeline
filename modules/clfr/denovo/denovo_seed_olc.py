@@ -20,7 +20,7 @@ Optional: pip install mappy  ->  faster overlap via minimap2 C engine.
 
 Self-test (no args)
 -------------------
-    python3 denovo_seed_ext.py
+    python3 denovo_seed_olc.py
 
 Standalone CLI (drop-in replacement for denovo_clfr_ram.py --module denovo_parallel)
 -------------------------------------------------------------------------------------
@@ -28,7 +28,7 @@ Run directly from a Snakemake work dir containing denovo/data_R1_sgrep.tsv
 and denovo/data_R2_sgrep.tsv (same layout denovo_clfr_ram.py expects).
 No megahit binary, no tmp_dir, no subprocess fork per UMI.
 
-    python3 denovo_seed_ext.py \\
+    python3 denovo_seed_olc.py \\
         --sequence_type se \\
         --num_processes 30 \\
         --n_line_chunk 2000000 \\
