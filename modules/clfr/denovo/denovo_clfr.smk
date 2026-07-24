@@ -195,8 +195,13 @@ rule map_denovo:
         "denovo/denovo.paf"
     params:
         minimap = config['params']['minimap2'],
-        refgenome = config['params']['ref_fa_mrna']
+        refgenome = config['params']['ref_fa_mrna'],
+        run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
+        if not params.run_parallel:
+            shell("touch {output}")
+            return
+
         if config['frag_de_novo']['denovo_type'] == 'correct_rc':
             command = ["{params.minimap} -x asm20 -t 20 ",
                    "{params.refgenome} ",
@@ -219,8 +224,13 @@ rule correc_direction_denovo:
         python = config['params']['general_python'],
         flank_end = config['frag_de_novo']['flank_end'],
         adapter_seq = config['frag_de_novo']['adapter_seq'],
-        src_dir = config['params']['src_dir']
+        src_dir = config['params']['src_dir'],
+        run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
+        if not params.run_parallel:
+            shell("touch {output}")
+            return
+
         if config['frag_de_novo']['denovo_type'] == 'correct_rc':
             command = ["{params.python} ",
                     "{params.src_dir}/modules/clfr/denovo/denovo_supp.py ",
@@ -243,7 +253,12 @@ rule plot_denovo_frag_len_distribution:
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'],
+        run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
+        if not params.run_parallel:
+            shell("touch {output[0]} {output[1]}")
+            return
+
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/denovo/denovo_supp.py",
                     "--fasta denovo/final_contigs_0.fa",
@@ -256,7 +271,13 @@ rule filter_fasta_1k:
         inputfile="denovo/denovo.fixRC.1bc1frag.fasta"
     output:
         outputfile="denovo/denovo.fixRC.1bc1frag.1k.fasta"
+    params:
+        run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
+        if not params.run_parallel:
+            shell("touch {output.outputfile}")
+            return
+
         from Bio import SeqIO
         outfile=open(output.outputfile, 'w')
 
@@ -266,8 +287,8 @@ rule filter_fasta_1k:
                     SeqIO.write(record, outfile, "fasta")
         outfile.close()
 
-rule denovo_done:
-    input:
-        "denovo/denovo.fixRC.1bc1frag.1k.fasta"
-    output:
-        touch("denovo/done.fq")
+# rule denovo_done:
+#     input:
+#         "denovo/denovo.fixRC.1bc1frag.1k.fasta"
+#     output:
+#         touch("denovo/done.fq")
