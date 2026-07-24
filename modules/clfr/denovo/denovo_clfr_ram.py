@@ -21,6 +21,7 @@ import multiprocessing as mp
 from multiprocessing import Pool
 import argparse
 import shutil
+import shlex
 from collections import defaultdict
 import itertools
 import fcntl
@@ -125,18 +126,26 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
         # r1_fasta.seek(0)
         r2_fasta.seek(0)
         
-        num_cpu =2 # at least 2
-        # Command for megahit
-        megahit_command = (
-            f"{megahit} -r /dev/stdin -t {num_cpu} "
-            f"-o {barcode_tmp_dir(barcode)} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
-            f"--min-contig-len={MIN_CTG_LEN}"
-        )
+        num_cpu = 1  # per-barcode input is tiny (tens of short reads); a single
+                      # thread finishes as fast as megahit's own thread-pool
+                      # startup would take -- this doubles concurrent barcode
+                      # throughput at a fixed total CPU budget vs num_cpu=2
+        # Command for megahit (list form, no shell=True: skips one extra
+        # /bin/sh fork+exec per barcode). shlex.split(megahit) instead of
+        # just [megahit, ...]: megahit is normally a single binary path,
+        # but if it's ever configured as a multi-word wrapper command
+        # ("python3 /path/to/script.py"), shell=True used to word-split it
+        # for free -- shlex.split keeps that working under shell=False.
+        megahit_command = shlex.split(megahit) + [
+            "-r", "/dev/stdin", "-t", str(num_cpu),
+            "-o", str(barcode_tmp_dir(barcode)), "--out-prefix", barcode,
+            "--k-min", str(K_MIN), "--k-max", str(K_MAX), "--force",
+            "--min-contig-len=%d" % MIN_CTG_LEN,
+        ]
 
         # Run megahit using pipes
         process = subprocess.Popen(
             megahit_command,
-            shell=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -164,18 +173,22 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
         r1_fasta.seek(0)
         r2_fasta.seek(0)
         
-        num_cpu =2 # at least 2
-        # Command for megahit
-        megahit_command = (
-            f"{megahit} -1 /dev/stdin -2 /dev/stdin -t {num_cpu} "
-            f"-o {barcode_tmp_dir(barcode)} --out-prefix {barcode} --k-min {K_MIN} --k-max {K_MAX} --force "
-            f"--min-contig-len={MIN_CTG_LEN}"
-        )
+        num_cpu = 1  # see process_barcode_se: per-barcode input is tiny,
+                      # a single thread finishes as fast as megahit's own
+                      # thread-pool startup would take
+        # Command for megahit (list form, no shell=True: skips one extra
+        # /bin/sh fork+exec per barcode). shlex.split(megahit): see
+        # process_barcode_se for why.
+        megahit_command = shlex.split(megahit) + [
+            "-1", "/dev/stdin", "-2", "/dev/stdin", "-t", str(num_cpu),
+            "-o", str(barcode_tmp_dir(barcode)), "--out-prefix", barcode,
+            "--k-min", str(K_MIN), "--k-max", str(K_MAX), "--force",
+            "--min-contig-len=%d" % MIN_CTG_LEN,
+        ]
 
         # Run megahit using pipes
         process = subprocess.Popen(
             megahit_command,
-            shell=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -206,6 +219,43 @@ def add_sgrep_line(meta_data, line):
     return True
 
 
+_worker_meta_data1 = None
+_worker_meta_data2 = None
+_worker_lock = None
+
+
+def _init_worker(meta_data1, meta_data2, lock):
+    """
+    Pool(initializer=...) target: runs once per worker process at pool
+    startup, not once per barcode. meta_data1/meta_data2/lock are sent
+    through the officially-supported process-bootstrap pickling channel
+    (the same one Process(args=...) uses) -- this is the one place a
+    Lock object is actually allowed to be pickled/shared at all.
+
+    This replaces mp.Manager().dict(): a Manager dict instead proxies
+    every single .get(barcode) call through a separate IPC server
+    process -- one pickled round trip per barcode, which adds up at
+    millions-of-barcodes scale. Passing the dicts once per worker here
+    (num_processes times total, not len(meta_data2) times) is far
+    cheaper. NOTE: they must NOT be passed as per-task starmap/map
+    arguments instead -- Pool distributes individual task args through
+    its own internal queue and would re-pickle the whole dict on every
+    single task, which is worse than Manager, not better.
+    """
+    global _worker_meta_data1, _worker_meta_data2, _worker_lock
+    _worker_meta_data1 = meta_data1
+    _worker_meta_data2 = meta_data2
+    _worker_lock = lock
+
+
+def _pool_process_barcode_pe(barcode):
+    process_barcode_pe(barcode, _worker_meta_data1, _worker_meta_data2, _worker_lock)
+
+
+def _pool_process_barcode_se(barcode):
+    process_barcode_se(barcode, _worker_meta_data2, _worker_lock)
+
+
 def process_pe_metadata(meta_data1, meta_data2, start_idx):
 
     # subprocess.call(f'mkdir -p /dev/shm/{BATCH_LANE}_{ID}', shell=True)
@@ -215,13 +265,10 @@ def process_pe_metadata(meta_data1, meta_data2, start_idx):
         for barcode in meta_data2.keys():
             process_barcode_pe(barcode, meta_data1, meta_data2, lock)
     else:
-        with mp.Manager() as manager:
-            shared_meta_data1 = manager.dict(meta_data1)
-            shared_meta_data2 = manager.dict(meta_data2)
-            lock = manager.Lock()
-
-            with mp.Pool(num_processes) as pool:
-                pool.starmap(process_barcode_pe, [(barcode, shared_meta_data1, shared_meta_data2, lock) for barcode in meta_data2.keys()])
+        lock = mp.Lock()
+        with mp.Pool(num_processes, initializer=_init_worker,
+                     initargs=(meta_data1, meta_data2, lock)) as pool:
+            pool.map(_pool_process_barcode_pe, meta_data2.keys())
 
     print(f'start_idx={start_idx}')
     print(f'denovo_BC_counts={len(meta_data2)}')
@@ -234,13 +281,10 @@ def process_se_metadata(meta_data2, start_idx):
         for barcode in meta_data2.keys():
             process_barcode_se(barcode, meta_data2, lock)
     else:
-        with mp.Manager() as manager:
-            # shared_meta_data1 = manager.dict(meta_data1)
-            shared_meta_data2 = manager.dict(meta_data2)
-            lock = manager.Lock()
-
-            with mp.Pool(num_processes) as pool:
-                pool.starmap(process_barcode_se, [(barcode, shared_meta_data2, lock) for barcode in meta_data2.keys()])
+        lock = mp.Lock()
+        with mp.Pool(num_processes, initializer=_init_worker,
+                     initargs=(None, meta_data2, lock)) as pool:
+            pool.map(_pool_process_barcode_se, meta_data2.keys())
 
     print(f'start_idx={start_idx}')
     print(f'denovo_BC_counts={len(meta_data2)}')
