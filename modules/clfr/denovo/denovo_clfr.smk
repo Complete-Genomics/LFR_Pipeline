@@ -148,7 +148,6 @@ rule run_denovo_parallel:
         tmp_dir = config['frag_de_novo'].get('tmp_dir', '/dev/shm'),
         assembler = config['frag_de_novo'].get('assembler', 'megahit'),
         n_umi = config['frag_de_novo'].get('assembly_N_umi'),
-        read_length = config['params'].get('total_r2_len'),
         src_dir = config['params']['src_dir']
     run:
         # chunk to run on mutiple nodes, or a dummy number 300000000 to run on single node
@@ -167,8 +166,6 @@ rule run_denovo_parallel:
                        "--nth_of_nodes 0"]
             if params.n_umi not in (None, "", "all"):
                 command.append("--n {params.n_umi} ")
-            if params.read_length not in (None, "", 0):
-                command.append("--read_length {params.read_length} ")
         else:
             command = ["{params.python}",
                        "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
