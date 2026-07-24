@@ -126,10 +126,13 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
         # r1_fasta.seek(0)
         r2_fasta.seek(0)
         
-        num_cpu = 1  # per-barcode input is tiny (tens of short reads); a single
-                      # thread finishes as fast as megahit's own thread-pool
-                      # startup would take -- this doubles concurrent barcode
-                      # throughput at a fixed total CPU budget vs num_cpu=2
+        num_cpu = 2  # at least 2 -- kept as-is; megahit's own source has no
+                      # hard minimum (defaults to 0 = autodetect all CPUs,
+                      # accepts -t 1 with no validation error), but that's
+                      # from reading the git master source, not from testing
+                      # the actual installed build/version on this cluster.
+                      # Not worth the production risk to drop this to 1
+                      # without verifying on the real megahit binary first.
         # Command for megahit (list form, no shell=True: skips one extra
         # /bin/sh fork+exec per barcode). shlex.split(megahit) instead of
         # just [megahit, ...]: megahit is normally a single binary path,
@@ -173,9 +176,8 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
         r1_fasta.seek(0)
         r2_fasta.seek(0)
         
-        num_cpu = 1  # see process_barcode_se: per-barcode input is tiny,
-                      # a single thread finishes as fast as megahit's own
-                      # thread-pool startup would take
+        num_cpu = 2  # at least 2 -- see process_barcode_se for why this is
+                      # kept unchanged rather than dropped to 1
         # Command for megahit (list form, no shell=True: skips one extra
         # /bin/sh fork+exec per barcode). shlex.split(megahit): see
         # process_barcode_se for why.
