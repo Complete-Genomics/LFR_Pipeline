@@ -105,9 +105,13 @@ def run_all_input(wildcards):
 
     if config['modules']['frag_de_novo']:
         if config['frag_de_novo'].get('run_parallel', False):
-            run_all_files.extend(["denovo/done.fq"])
+            run_all_files.extend(["denovo/frag_denovo_done"])
         else:
-            run_all_files.extend(["denovo/data_R1_sgrep.tsv", "denovo/data_R2_sgrep.tsv"])
+            run_all_files.extend([
+                "denovo/data_R1_sgrep.tsv",
+                "denovo/data_R2_sgrep.tsv",
+                "denovo/denovo.fixRC.1bc1frag.1k.fasta",
+            ])
 
     # if config['modules']['exon2fasta'] == True:
     #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
