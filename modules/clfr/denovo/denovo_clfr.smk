@@ -287,8 +287,8 @@ rule filter_fasta_1k:
                     SeqIO.write(record, outfile, "fasta")
         outfile.close()
 
-# rule denovo_done:
-#     input:
-#         "denovo/denovo.fixRC.1bc1frag.1k.fasta"
-#     output:
-#         touch("denovo/done.fq")
+rule denovo_done:
+    input:
+        "denovo/denovo.fixRC.1bc1frag.1k.fasta"
+    output:
+        touch("denovo/done.fq")
