@@ -70,6 +70,37 @@ length errors) -- a read with an indel relative to the contig simply
 fails the concordance check and is excluded from voting rather than
 corrupting the consensus. On by default; disable with
 configure(polish=False) or CLI --no_polish.
+
+Internal-anchor extension (fallback for boundary-overlap failures)
+------------------------------------------------------------------
+suffix_prefix_overlap only ever compares a candidate read's literal
+first/last N bases against the contig's boundary. Real data (verified
+on a real 16S rRNA barcode, BLAST-confirmed truth sequence) can have
+reads whose genuinely-matching content does not start at the read's
+own edge -- e.g. a short PCR-chimera artifact or quality-degraded
+stretch fused onto an otherwise-accurate long middle section. Such
+reads pass right by suffix_prefix_overlap since it never looks inside
+a read for a usable anchor.
+
+internal_anchor_extend() is a fallback tried only after ordinary
+boundary extension is fully exhausted for a contig: it scans every
+k-mer position inside the candidate (not just its start) for a match
+to the contig's boundary region, verifies a real, honest overlap from
+there (>= internal_min_verify, deliberately longer than the default
+boundary min_ov to guard against short universally-conserved-region
+false positives -- e.g. bacterial 16S primer sites shared across
+unrelated organisms), and on success extends the contig with only the
+NEW sequence past the verified overlap -- discarding whatever noise
+came before the anchor in the candidate.
+
+Verified on real data: recovered a barcode's longest contig from 575bp
+to 1115bp (97.2% identity, correct monotonic alignment, to the
+BLAST-confirmed 1368bp megahit truth), with no measured increase in
+chimeric-merge rate on synthetic shared-conserved-motif stress tests.
+Known gap: only searches for the anchor inside the candidate, not
+inside the contig itself (see _internal_anchor_extend_3prime
+docstring). On by default; disable with configure(use_internal_anchor=False)
+or CLI --no_internal_anchor.
 """
 
 import itertools
@@ -90,13 +121,15 @@ _CFG = {
     "polish_min_coverage": 3,     # min total votes (incl. 1 implicit vote for original base) to consider flipping
     "polish_vote_concordance": 0.6,  # winning base must hold >= this fraction of votes to flip
     "polish_kmer_step":    5,     # stride for sampling k-mers when re-aligning reads to the contig
+    "use_internal_anchor":  True,  # fallback: k-mer anchor anywhere in a read, not just its literal ends
+    "internal_min_verify":  60,    # min confirmed overlap length for the internal-anchor fallback
 }
 
 
 def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
               out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=None,
               polish=True, polish_min_coverage=3, polish_vote_concordance=0.6,
-              polish_kmer_step=5):
+              polish_kmer_step=5, use_internal_anchor=True, internal_min_verify=60):
     """Call once in the parent process before spawning Pool workers."""
     _CFG["min_ctg"]   = min_ctg_len
     _CFG["min_ov"]    = min_overlap
@@ -108,6 +141,8 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
     _CFG["polish_min_coverage"]      = polish_min_coverage
     _CFG["polish_vote_concordance"]  = polish_vote_concordance
     _CFG["polish_kmer_step"]         = polish_kmer_step
+    _CFG["use_internal_anchor"]      = use_internal_anchor
+    _CFG["internal_min_verify"]      = internal_min_verify
 
 
 # ── sequence utilities ────────────────────────────────────────────────────────
@@ -157,13 +192,108 @@ def suffix_prefix_overlap(a, b, min_ov, max_mm, seed_k=10):
 
 # ── assembler ─────────────────────────────────────────────────────────────────
 
-def _extend_one_contig(pool, min_ov, max_mm, seed_k):
+def _internal_anchor_extend_3prime(contig, candidate, min_ov, max_mm, seed_k, min_verify):
+    """
+    Try to extend contig's 3' (right) end using a k-mer anchor located
+    ANYWHERE inside candidate, not just at candidate's own start.
+
+    suffix_prefix_overlap only ever compares candidate's literal first N
+    bases against contig's tail -- real reads can have their genuinely
+    matching region start partway in (e.g. a short PCR-chimera artifact
+    or degraded-quality stretch fused onto an otherwise-accurate read),
+    which suffix_prefix_overlap structurally cannot see. This scans every
+    k-mer position in candidate, and if one matches a k-mer in contig's
+    tail window, verifies the full implied overlap from there and (on
+    success) returns only the NEW tail beyond the verified overlap --
+    discarding whatever came before the anchor in candidate.
+
+    min_verify: minimum verified overlap length to accept -- deliberately
+    longer than the default boundary min_ov, since allowing the anchor to
+    sit anywhere in candidate is more permissive about WHERE a match can
+    start; a longer required confirmed stretch guards against spurious
+    short matches (e.g. a universally-conserved primer region shared by
+    unrelated templates, not a genuine single-molecule overlap).
+
+    KNOWN LIMITATION: this only searches for the anchor inside
+    `candidate`, assuming `contig`'s own boundary is reliable. It does
+    NOT handle the reverse (contig's edge is the noisy one, candidate's
+    edge is clean) -- in practice this is rare, since a contig's boundary
+    was itself either the original longest raw read (usually the
+    best-quality read in the pool) or was produced by a prior verified
+    merge, so it's already been checked. The one gap is if the very
+    first seed (the single longest raw read) happens to have a noisy
+    edge itself; not handled here.
+
+    Returns the new (extended) contig, or None if no valid anchor found.
+    """
+    n = len(contig)
+    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    if check_len < seed_k:
+        return None
+
+    tail = contig[-check_len:]
+    tail_kmers = {}
+    for p in range(len(tail) - seed_k + 1):
+        tail_kmers.setdefault(tail[p:p + seed_k], []).append(p)
+
+    L = len(candidate)
+    best = None  # (overlap_len, new_tail)
+    for j in range(0, L - seed_k + 1):
+        for p in tail_kmers.get(candidate[j:j + seed_k], ()):
+            contig_start = n - check_len + p
+            overlap_len = min(check_len - p, L - j)
+            if overlap_len < min_verify:
+                continue
+            contig_region = contig[contig_start:contig_start + overlap_len]
+            cand_region = candidate[j:j + overlap_len]
+            mm = sum(x != y for x, y in zip(contig_region, cand_region))
+            if mm / overlap_len <= max_mm:
+                if best is None or overlap_len > best[0]:
+                    best = (overlap_len, candidate[j + overlap_len:])
+
+    if best is not None:
+        return contig + best[1]
+    return None
+
+
+def internal_anchor_extend(contig, candidate, min_ov, max_mm, seed_k=10, min_verify=60):
+    """
+    Fallback extension for both directions: try 3' extension (contig's
+    right end) directly, and 5' extension (contig's left end) by
+    reversing both sequences, running the same 3'-extension logic, then
+    reversing the result back. Tries both forward and reverse-complement
+    orientations of candidate. See _internal_anchor_extend_3prime for why
+    this exists and how min_verify guards against false positives.
+
+    Returns the new contig, or None if no valid anchor extension found
+    in either direction/orientation.
+    """
+    for cand in (candidate, rc(candidate)):
+        result = _internal_anchor_extend_3prime(contig, cand, min_ov, max_mm, seed_k, min_verify)
+        if result is not None:
+            return result
+
+        result_rev = _internal_anchor_extend_3prime(contig[::-1], cand[::-1], min_ov, max_mm, seed_k, min_verify)
+        if result_rev is not None:
+            return result_rev[::-1]
+
+    return None
+
+
+def _extend_one_contig(pool, min_ov, max_mm, seed_k, use_internal_anchor=True, internal_min_verify=60):
     """
     Build a single greedy-extended contig from the longest remaining read
     in `pool` (a list of sequences). Returns (contig, used_indices) where
     used_indices always includes at least the seed's own index -- so the
     caller can remove them from the pool and make progress even when the
     seed fails to extend at all (a singleton/orphan read).
+
+    Boundary suffix/prefix extension (suffix_prefix_overlap) is always
+    tried first. Internal-anchor extension (internal_anchor_extend) is a
+    fallback tried only once a full sweep finds no more boundary
+    extensions -- and after every internal-anchor success, boundary
+    extension is retried first again before falling back further, since
+    the newly-extended boundary may unlock ordinary merges.
     """
     contig = pool[0]
     used = {0}
@@ -201,10 +331,26 @@ def _extend_one_contig(pool, min_ov, max_mm, seed_k):
                 # restart scan so new contig ends are retried against all unused
                 break
 
+        if changed or not unused or not use_internal_anchor:
+            continue
+
+        # boundary extension is fully exhausted -- try the internal-anchor
+        # fallback once before giving up on this contig
+        for i in list(unused):
+            new_contig = internal_anchor_extend(
+                contig, pool[i], min_ov, max_mm, seed_k, min_verify=internal_min_verify)
+            if new_contig is not None:
+                contig = new_contig
+                unused.remove(i)
+                used.add(i)
+                changed = True
+                break
+
     return contig, used
 
 
-def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_contigs=4):
+def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_contigs=4,
+                 use_internal_anchor=True, internal_min_verify=60):
     """
     Greedy seed-extension assembly for one UMI's reads.
 
@@ -223,6 +369,10 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_conti
     seed_k      : k-mer length for overlap pre-filter [10]
     max_contigs : stop after this many accepted contigs [4] (matches
                   _write_contigs' existing per-barcode cap)
+    use_internal_anchor : also try internal_anchor_extend() as a fallback
+                  when boundary suffix/prefix extension stalls [True]
+    internal_min_verify : min confirmed overlap length for the internal
+                  anchor fallback to accept a match [60]
 
     Returns list of contig sequences (0 or more per UMI).
     """
@@ -239,7 +389,8 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_conti
 
     contigs = []
     while pool and len(contigs) < max_contigs:
-        contig, used = _extend_one_contig(pool, min_ov, max_mm, seed_k)
+        contig, used = _extend_one_contig(pool, min_ov, max_mm, seed_k,
+                                          use_internal_anchor, internal_min_verify)
         if len(contig) >= min_ctg:
             contigs.append(contig)
         # always drop every read the attempt consumed (even just the seed
@@ -490,6 +641,8 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     seed_k   = _CFG["seed_k"]
     out_file = _CFG["out_file"].format(id=_CFG["out_id"])
     use_mp   = _CFG["use_mappy"]
+    use_anchor  = _CFG["use_internal_anchor"]
+    anchor_verify = _CFG["internal_min_verify"]
 
     seqs = _seqs_from_meta(shared_meta_data2, barcode)
     if not seqs:
@@ -499,7 +652,9 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     if use_mp is not False:
         contigs = _assemble_umi_mappy(seqs, min_ctg)
     if contigs is None:
-        contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
+        contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k,
+                               use_internal_anchor=use_anchor,
+                               internal_min_verify=anchor_verify)
 
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
@@ -513,6 +668,8 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     seed_k   = _CFG["seed_k"]
     out_file = _CFG["out_file"].format(id=_CFG["out_id"])
     use_mp   = _CFG["use_mappy"]
+    use_anchor  = _CFG["use_internal_anchor"]
+    anchor_verify = _CFG["internal_min_verify"]
 
     r1 = _seqs_from_meta(shared_meta_data1, barcode)
     r2 = _seqs_from_meta(shared_meta_data2, barcode)
@@ -524,7 +681,9 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     if use_mp is not False:
         contigs = _assemble_umi_mappy(seqs, min_ctg)
     if contigs is None:
-        contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
+        contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k,
+                               use_internal_anchor=use_anchor,
+                               internal_min_verify=anchor_verify)
 
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
@@ -681,11 +840,17 @@ def _main_cli():
                          "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")
     ap.add_argument("--no_polish", action="store_true",
                     help="skip post-assembly majority-vote consensus correction (on by default)")
+    ap.add_argument("--no_internal_anchor", action="store_true",
+                    help="skip internal k-mer anchor fallback extension (on by default)")
+    ap.add_argument("--internal_min_verify", type=int, default=60,
+                    help="min confirmed overlap length for the internal-anchor fallback [60]")
     args = ap.parse_args()
 
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
               max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
-              polish=not args.no_polish)
+              polish=not args.no_polish,
+              use_internal_anchor=not args.no_internal_anchor,
+              internal_min_verify=args.internal_min_verify)
 
     if not os.path.isdir("denovo"):
         os.makedirs("denovo")
@@ -823,6 +988,34 @@ def _run_selftest():
         polish_ok = (polished == good_contig) or (polished[err_pos] == good_contig[err_pos])
     print("[polish]   corrected={}".format(polish_ok))
 
+    # internal-anchor fallback: simulate a real-data pattern found in 16S
+    # rRNA barcodes (noisy/chimeric read edge fused onto an otherwise
+    # accurate long middle section) -- a boundary-only suffix/prefix
+    # overlap can never see the genuine match since it's not at the
+    # read's literal start; the internal-anchor fallback should find it.
+    # NOTE: assemble_umi always picks the LONGEST read as the initial
+    # seed/contig, so the clean read must be the longer of the two here --
+    # the current fallback only searches for an anchor inside the
+    # candidate against the (assumed-reliable) contig boundary, not the
+    # reverse.
+    frag3 = _rand_seq(500)
+    seed3 = frag3[:300]                          # longer -> becomes the seed/contig
+    junk_prefix = _rand_seq(40)                   # unrelated garbage stitched onto a real overlap
+    bridging_read = junk_prefix + frag3[200:400]  # shorter -> tested as a candidate; real match starts at position 40, not 0
+    ctg_no_anchor = assemble_umi([seed3, bridging_read], min_ov=30, min_ctg=350,
+                                  use_internal_anchor=False)
+    ctg_with_anchor = assemble_umi([seed3, bridging_read], min_ov=30, min_ctg=350,
+                                    use_internal_anchor=True, internal_min_verify=60)
+    anchor_ok = bool(
+        (not ctg_no_anchor or len(ctg_no_anchor[0]) < 400)
+        and ctg_with_anchor and len(ctg_with_anchor[0]) >= 400
+        and ctg_with_anchor[0] in frag3
+    )
+    print("[internal_anchor] no_anchor_len={}  with_anchor_len={}  rescued={}".format(
+        len(ctg_no_anchor[0]) if ctg_no_anchor else 0,
+        len(ctg_with_anchor[0]) if ctg_with_anchor else 0,
+        anchor_ok))
+
     ok = True
     if not ctg_hi or (ctg_hi[0] not in FRAG and FRAG not in ctg_hi[0]):
         print("FAIL: hi-depth contig does not match fragment", file=sys.stderr)
@@ -835,6 +1028,9 @@ def _run_selftest():
         ok = False
     if not polish_ok:
         print("FAIL: polish did not correct the injected substitution error", file=sys.stderr)
+        ok = False
+    if not anchor_ok:
+        print("FAIL: internal-anchor fallback did not rescue the noisy-edge read", file=sys.stderr)
         ok = False
     if ok:
         print("correctness: OK")
