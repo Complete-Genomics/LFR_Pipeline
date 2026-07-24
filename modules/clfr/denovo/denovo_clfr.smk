@@ -148,8 +148,13 @@ rule run_denovo_parallel:
         tmp_dir = config['frag_de_novo'].get('tmp_dir', '/dev/shm'),
         assembler = config['frag_de_novo'].get('assembler', 'megahit'),
         n_umi = config['frag_de_novo'].get('assembly_N_umi'),
+        run_parallel = config['frag_de_novo'].get('run_parallel', False),
         src_dir = config['params']['src_dir']
     run:
+        if not params.run_parallel:
+            shell("mkdir -p denovo && touch {output}")
+            return
+
         # chunk to run on mutiple nodes, or a dummy number 300000000 to run on single node
         params.end_idx = config['frag_de_novo'].get('end_idx')
         params.start_idx = config['frag_de_novo'].get('start_idx', 0)
