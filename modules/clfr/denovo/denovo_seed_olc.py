@@ -86,6 +86,7 @@ _CFG = {
     "out_file":  "denovo/final_contigs_{id}.fa",
     "seed_k":    10,    # k-mer size for overlap pre-filter
     "use_mappy": None,  # None = auto-detect, True/False = force
+    "read_length": None,  # discard contigs <= this length (i.e. never actually extended past a single raw read)
     "polish":              True,  # majority-vote consensus correction after assembly
     "polish_min_coverage": 3,     # min total votes (incl. 1 implicit vote for original base) to consider flipping
     "polish_vote_concordance": 0.6,  # winning base must hold >= this fraction of votes to flip
@@ -95,6 +96,7 @@ _CFG = {
 
 def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
               out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=None,
+              read_length=None,
               polish=True, polish_min_coverage=3, polish_vote_concordance=0.6,
               polish_kmer_step=5):
     """Call once in the parent process before spawning Pool workers."""
@@ -104,6 +106,7 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
     _CFG["out_id"]    = out_id
     _CFG["out_file"]  = out_file
     _CFG["use_mappy"] = use_mappy
+    _CFG["read_length"] = read_length
     _CFG["polish"]                   = polish
     _CFG["polish_min_coverage"]      = polish_min_coverage
     _CFG["polish_vote_concordance"]  = polish_vote_concordance
@@ -482,14 +485,28 @@ def _polish_all(contigs, seqs, min_ov, max_mm, seed_k):
     ]
 
 
+def _filter_by_read_length(contigs, read_length):
+    """
+    Drop contigs <= read_length: a contig that short was never actually
+    extended past a single raw read (or two reads that fully contained
+    each other) -- not a genuine assembly, just an unmerged seed. Applies
+    uniformly regardless of which engine (assemble_umi or mappy) produced
+    the contig. read_length=None disables this filter.
+    """
+    if read_length is None or not contigs:
+        return contigs
+    return [c for c in contigs if len(c) > read_length]
+
+
 def process_barcode_se(barcode, shared_meta_data2, lock):
     """SE drop-in for denovo_clfr_ram.process_barcode_se."""
-    min_ctg  = _CFG["min_ctg"]
-    min_ov   = _CFG["min_ov"]
-    max_mm   = _CFG["max_mm"]
-    seed_k   = _CFG["seed_k"]
-    out_file = _CFG["out_file"].format(id=_CFG["out_id"])
-    use_mp   = _CFG["use_mappy"]
+    min_ctg     = _CFG["min_ctg"]
+    min_ov      = _CFG["min_ov"]
+    max_mm      = _CFG["max_mm"]
+    seed_k      = _CFG["seed_k"]
+    out_file    = _CFG["out_file"].format(id=_CFG["out_id"])
+    use_mp      = _CFG["use_mappy"]
+    read_length = _CFG["read_length"]
 
     seqs = _seqs_from_meta(shared_meta_data2, barcode)
     if not seqs:
@@ -501,18 +518,20 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     if contigs is None:
         contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
 
+    contigs = _filter_by_read_length(contigs, read_length)
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
 
 
 def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     """PE drop-in for denovo_clfr_ram.process_barcode_pe."""
-    min_ctg  = _CFG["min_ctg"]
-    min_ov   = _CFG["min_ov"]
-    max_mm   = _CFG["max_mm"]
-    seed_k   = _CFG["seed_k"]
-    out_file = _CFG["out_file"].format(id=_CFG["out_id"])
-    use_mp   = _CFG["use_mappy"]
+    min_ctg     = _CFG["min_ctg"]
+    min_ov      = _CFG["min_ov"]
+    max_mm      = _CFG["max_mm"]
+    seed_k      = _CFG["seed_k"]
+    out_file    = _CFG["out_file"].format(id=_CFG["out_id"])
+    use_mp      = _CFG["use_mappy"]
+    read_length = _CFG["read_length"]
 
     r1 = _seqs_from_meta(shared_meta_data1, barcode)
     r2 = _seqs_from_meta(shared_meta_data2, barcode)
@@ -526,6 +545,7 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     if contigs is None:
         contigs = assemble_umi(seqs, min_ov, max_mm, min_ctg, seed_k)
 
+    contigs = _filter_by_read_length(contigs, read_length)
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock)
 
@@ -681,10 +701,14 @@ def _main_cli():
                          "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")
     ap.add_argument("--no_polish", action="store_true",
                     help="skip post-assembly majority-vote consensus correction (on by default)")
+    ap.add_argument("--read_length", type=int, default=None,
+                    help="discard contigs <= this length -- they were never actually "
+                         "extended past a single raw read; default = no extra filter")
     args = ap.parse_args()
 
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
               max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
+              read_length=args.read_length,
               polish=not args.no_polish)
 
     if not os.path.isdir("denovo"):
