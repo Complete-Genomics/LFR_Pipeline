@@ -1,0 +1,44 @@
+name: denovo
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # denovo_seed_olc.py itself is pure Python stdlib (itertools, os,
+  # collections) -- no required dependencies. This env exists ONLY to give
+  # it a modern interpreter: the main lfr_pipeline env is pinned to
+  # python=3.6 for legacy Snakemake compatibility (see config/env.yml),
+  # but 3.6 predates most of CPython's interpreter-level speedups for
+  # pure-Python hot loops -- most notably the specializing adaptive
+  # interpreter (PEP 659) that landed in 3.11. Re-benchmark on the target
+  # server after creating this env (python3 benchmark_seedext.py --n 1000
+  # --r2 <path>) rather than assuming the version bump alone explains any
+  # gap -- server CPU generation matters too (see lfr.md denovo section).
+  - python=3.11
+  - pip
+  - setuptools
+  - wheel
+
+  # Optional acceleration: denovo_seed_olc.py auto-detects mappy at
+  # runtime (configure(use_mappy=None), the default) and uses it for a
+  # faster minimap2-backed overlap path when present, falling back to the
+  # pure-Python OLC path when it isn't. Not required -- comment out to
+  # keep this env minimal and confirm the pure-Python path alone still
+  # benefits from the newer interpreter.
+  - mappy
+
+  # Optional: only needed to run denovo_clfr_ram.py's megahit path, or to
+  # A/B benchmark it against denovo_seed_olc.py on the same box (as done
+  # during this session's real-16S-data comparison). Not used by
+  # denovo_seed_olc.py itself.
+  - megahit
+
+  # Optional: only needed for benchmark_1000umi.py-style plotting
+  # (contig length histograms, timing bar charts). Not needed to run or
+  # test denovo_seed_olc.py itself.
+  - matplotlib
+
+  # Optional: nicer test-runner output / auto-discovery for
+  # test_denovo_seed_olc.py. Not required -- it's a stdlib unittest suite
+  # and runs fine via `python3 -m unittest test_denovo_seed_olc -v`.
+  - pytest
