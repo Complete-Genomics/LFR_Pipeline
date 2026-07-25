@@ -98,10 +98,22 @@ Verified on real data: recovered a barcode's longest contig from 575bp
 to 1115bp (97.2% identity, correct monotonic alignment, to the
 BLAST-confirmed 1368bp megahit truth), with no measured increase in
 chimeric-merge rate on synthetic shared-conserved-motif stress tests.
-Known gap: only searches for the anchor inside the candidate, not
-inside the contig itself (see _internal_anchor_extend_3prime
-docstring). On by default; disable with configure(use_internal_anchor=False)
-or CLI --no_internal_anchor.
+
+The forward pair above only searches for the anchor inside the
+candidate, assuming the contig's own boundary is reliable -- true except
+for the very first seed's own raw, unverified edge (rare, but the one
+case where this assumption breaks: sorting by post-trim length picks the
+longest read as seed, which is at best a weak proxy for "this read's own
+edges are clean" -- trimming mostly reflects adapter/insert-size
+geometry, not base-level error rate at the very ends). A reverse pair
+(_internal_anchor_extend_3prime_reverse_indexed /
+_internal_anchor_extend_5prime_reverse_indexed) trusts a candidate's own
+content instead and searches for where it anchors inside the contig,
+truncating and replacing the contig's own noisy edge rather than
+carrying it forward forever. Tried only as a last resort, after both
+forward directions fail, so existing behavior is unchanged whenever a
+forward match exists. On by default; disable with
+configure(use_internal_anchor=False) or CLI --no_internal_anchor.
 """
 
 import itertools
@@ -381,6 +393,121 @@ def _internal_anchor_extend_5prime_indexed(contig, pool, kmer_index, unused_set,
     return None, None
 
 
+def _internal_anchor_extend_3prime_reverse_indexed(contig, pool, unused_set,
+                                                     min_ov, max_mm, seed_k, min_verify):
+    """
+    Reverse-direction mirror of _internal_anchor_extend_3prime_indexed:
+    that function trusts the contig's own tail and searches for an anchor
+    inside a candidate; this one instead trusts a candidate's own content
+    and searches for where it anchors somewhere INSIDE the contig's tail
+    region -- so a noisy contig tail (in practice: the very first seed's
+    own raw, unverified 3' edge -- see internal_anchor_extend_indexed's
+    former KNOWN LIMITATION note) gets truncated and replaced instead of
+    being carried forward unverified forever, the way the forward-only
+    version does (it only ever appends new candidate content past an
+    anchor -- it never touches contig content already committed before
+    that anchor).
+
+    Only accepts a candidate that reaches forward far enough to cover the
+    contig all the way from the anchor through its current end -- if the
+    candidate is shorter than that, there's no way to tell whether the
+    contig's own un-covered remainder beyond the candidate is noise or
+    genuine, so it's left alone rather than guessed at.
+
+    Builds its own small k-mer index over just the contig's tail window
+    (not the shared pool-wide kmer_index) since this is a rare last-resort
+    tried only after both forward directions have already failed.
+
+    Returns (new_contig, used_pool_index) or (None, None).
+    """
+    n = len(contig)
+    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    if check_len < seed_k:
+        return None, None
+
+    contig_kmers = _kmer_positions(contig, seed_k, start=n - check_len)
+    best = None  # (sort_key, new_contig, pool_idx)
+
+    for idx in unused_set:
+        for cand in (pool[idx], rc(pool[idx])):
+            L = len(cand)
+            # scan the candidate's FULL length, not just its own tail window
+            # -- the anchor that lets it reach through to contig's own end
+            # can sit anywhere in the candidate, e.g. near ITS start if the
+            # candidate happens to be much longer than the noisy stretch.
+            for p in range(L - seed_k + 1):
+                for anchor_pos in contig_kmers.get(cand[p:p + seed_k], ()):
+                    if L - p < n - anchor_pos:
+                        continue  # candidate doesn't reach forward to contig's own end
+                    overlap_len = n - anchor_pos
+                    if overlap_len < min_verify:
+                        continue
+                    contig_region = contig[anchor_pos:n]
+                    cand_region = cand[p:p + overlap_len]
+                    if _within_mismatch_budget(contig_region, cand_region, overlap_len, max_mm):
+                        new_contig = contig[:anchor_pos] + cand[p:]
+                        sort_key = (idx, -overlap_len)
+                        if best is None or sort_key < best[0]:
+                            best = (sort_key, new_contig, idx)
+
+    if best is not None:
+        return best[1], best[2]
+    return None, None
+
+
+def _internal_anchor_extend_5prime_reverse_indexed(contig, pool, unused_set,
+                                                     min_ov, max_mm, seed_k, min_verify):
+    """
+    Reverse-direction mirror of _internal_anchor_extend_5prime_indexed
+    (see _internal_anchor_extend_3prime_reverse_indexed for the general
+    idea): trusts a candidate's own content and searches for where it
+    anchors somewhere INSIDE the contig's HEAD region, so a noisy contig
+    head -- in practice: the very first seed's own raw, unverified 5' edge
+    -- gets truncated and replaced instead of carried forward unverified.
+
+    Only accepts a candidate that reaches back far enough to cover the
+    contig all the way from position 0 through the anchor -- otherwise
+    there's no way to tell whether the contig's own un-covered head before
+    that point is noise or genuine.
+
+    Returns (new_contig, used_pool_index) or (None, None).
+    """
+    n = len(contig)
+    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    if check_len < seed_k:
+        return None, None
+
+    contig_kmers = _kmer_positions(contig, seed_k, end=check_len)
+    best = None  # (sort_key, new_contig, pool_idx)
+
+    for idx in unused_set:
+        for cand in (pool[idx], rc(pool[idx])):
+            L = len(cand)
+            # scan the candidate's FULL length, not just its own head window
+            # -- the anchor that lets it reach back through to contig's own
+            # start can sit anywhere in the candidate, e.g. near ITS end if
+            # the candidate happens to be much longer than the noisy stretch.
+            for p in range(L - seed_k + 1):
+                for anchor_pos in contig_kmers.get(cand[p:p + seed_k], ()):
+                    cand_prefix_start = p - anchor_pos
+                    if cand_prefix_start < 0:
+                        continue  # candidate doesn't reach back to contig's own start
+                    overlap_len = anchor_pos + seed_k
+                    if overlap_len < min_verify:
+                        continue
+                    contig_region = contig[:overlap_len]
+                    cand_region = cand[cand_prefix_start:cand_prefix_start + overlap_len]
+                    if _within_mismatch_budget(contig_region, cand_region, overlap_len, max_mm):
+                        new_contig = cand[:p + seed_k] + contig[overlap_len:]
+                        sort_key = (idx, -overlap_len)
+                        if best is None or sort_key < best[0]:
+                            best = (sort_key, new_contig, idx)
+
+    if best is not None:
+        return best[1], best[2]
+    return None, None
+
+
 def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
                                     min_ov, max_mm, seed_k=10, min_verify=60):
     """
@@ -399,12 +526,18 @@ def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
     short matches (e.g. a universally-conserved primer region shared by
     unrelated templates, not a genuine single-molecule overlap).
 
-    KNOWN LIMITATION: only searches for the anchor inside candidate
-    reads, assuming the contig's own boundary is reliable -- doesn't
-    handle the reverse (contig's edge is the noisy one). In practice
-    rare, since a contig's boundary was either the original longest raw
-    read or the product of a prior verified merge. The gap is only the
-    very first seed itself having a noisy edge.
+    Tries, in order: forward 3' (trust contig's tail, search inside
+    candidates), forward 5' (trust contig's head, search inside
+    candidates), then -- only if both of those fail -- reverse 3' and
+    reverse 5' (trust a CANDIDATE's own content instead, search for where
+    it anchors inside the contig itself). The reverse pair fixes what
+    used to be a known gap: the forward-only pair assumes the contig's
+    own boundary is reliable and never corrects it, which mostly doesn't
+    matter (a contig's boundary is either the original longest raw read
+    or the product of a prior verified merge) except for the very first
+    seed's own raw, unverified edge. Ordering forward before reverse
+    keeps existing behavior byte-identical whenever a forward match
+    exists; reverse only ever fires as a true last resort.
 
     Returns (new_contig, used_pool_index) or (None, None).
     """
@@ -412,8 +545,16 @@ def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
         contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify)
     if result[0] is not None:
         return result
-    return _internal_anchor_extend_5prime_indexed(
+    result = _internal_anchor_extend_5prime_indexed(
         contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify)
+    if result[0] is not None:
+        return result
+    result = _internal_anchor_extend_3prime_reverse_indexed(
+        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify)
+    if result[0] is not None:
+        return result
+    return _internal_anchor_extend_5prime_reverse_indexed(
+        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify)
 
 
 def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anchor=True,
