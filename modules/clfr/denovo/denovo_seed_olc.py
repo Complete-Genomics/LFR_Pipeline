@@ -155,38 +155,96 @@ def rc(seq):
     return seq.translate(_RC)[::-1]
 
 
-def _kmer_set(seq, k, start=0, end=None):
+def _kmer_positions(seq, k, start=0, end=None):
+    """Map kmer -> list of its ABSOLUTE positions within seq[start:end]."""
     s = seq[start:end]
     if len(s) < k:
-        return set()
-    return {s[i:i+k] for i in range(len(s) - k + 1)}
+        return {}
+    positions = {}
+    for i in range(len(s) - k + 1):
+        positions.setdefault(s[i:i + k], []).append(start + i)
+    return positions
 
 
 # ── core overlap ──────────────────────────────────────────────────────────────
+
+def _within_mismatch_budget(a_tail, b_head, ov, max_mm):
+    """
+    True iff mismatches between a_tail and b_head satisfy mm/ov <= max_mm.
+
+    Exits as soon as the running mismatch count makes that impossible --
+    mismatches only accumulate as the loop progresses, so once mm/ov
+    exceeds max_mm it can never recover to pass. Profiling showed that,
+    for real 16S data, the overwhelming majority of candidate ov values
+    tested here are coincidental k-mer hits with no real underlying
+    overlap, which mismatch heavily almost immediately. Rejecting those
+    early turns what used to be a full O(ov) scan (199M+ character
+    comparisons across 227K calls, ~10s of tottime alone) into a
+    handful of comparisons per rejected candidate.
+    """
+    mm = 0
+    for x, y in zip(a_tail, b_head):
+        if x != y:
+            mm += 1
+            if mm > ov * max_mm:
+                return False
+    return True
+
 
 def suffix_prefix_overlap(a, b, min_ov, max_mm, seed_k=10):
     """
     Return the length of b's prefix that overlaps a's suffix, 0 if none.
 
     Checks decreasing overlap lengths so returns the longest valid overlap.
-    Uses a k-mer seed pre-filter to skip pairs that cannot possibly overlap,
-    giving ~5-10x speedup when most pairs are non-overlapping.
+
+    Two-stage: (1) an exact k-mer match at a-position p_a / b-position p_b
+    can only be part of a valid suffix/prefix alignment at exactly
+    ov = len(a) - p_a + p_b -- profiling on real 16S data showed the
+    previous blind "try every ov from limit down to min_ov" scan was 83%
+    of total assemble_umi() runtime (200M+ character comparisons for
+    227K calls), almost all wasted on reads that share a coincidental
+    k-mer near the boundary but have no real overlap. Deriving candidate
+    ov values directly from where the shared k-mer actually sits collapses
+    that scan to just the handful of lengths real matches imply.
+    (2) if none of those candidates pass max_mm, falls back to the
+    original exhaustive scan over every remaining ov -- this is only a
+    safety net (dense/evenly-spaced mismatches could in principle break
+    up every exact k-mer window within the true best ov while an
+    unrelated coincidental k-mer elsewhere still passes the existence
+    pre-filter below), so stage (1) can only make this function faster,
+    never change what it returns relative to before.
     """
     limit = min(len(a), len(b))
     if limit < min_ov:
         return 0
 
-    # seed filter: share at least one k-mer near the boundary
+    # existence pre-filter, same semantics as before: no shared k-mer
+    # anywhere in the boundary window -> definitely no valid overlap
     check_len = min(limit, max(min_ov * 3, seed_k * 4))
-    a_end_kmers = _kmer_set(a, seed_k, start=len(a) - check_len)
-    b_start_kmers = _kmer_set(b, seed_k, end=check_len)
-    if not (a_end_kmers & b_start_kmers):
+    a_kmers = _kmer_positions(a, seed_k, start=len(a) - check_len)
+    b_kmers = _kmer_positions(b, seed_k, end=check_len)
+    shared = a_kmers.keys() & b_kmers.keys()
+    if not shared:
         return 0
 
-    # full mismatch check (longest-first)
+    # stage 1: only test ov values an actual k-mer match implies
+    candidates = set()
+    for kmer in shared:
+        for p_a in a_kmers[kmer]:
+            for p_b in b_kmers[kmer]:
+                ov = len(a) - p_a + p_b
+                if min_ov <= ov <= limit:
+                    candidates.add(ov)
+
+    for ov in sorted(candidates, reverse=True):
+        if _within_mismatch_budget(a[-ov:], b[:ov], ov, max_mm):
+            return ov
+
+    # stage 2 (rare safety net): fall back to the exhaustive scan
     for ov in range(limit, min_ov - 1, -1):
-        mm = sum(x != y for x, y in zip(a[-ov:], b[:ov]))
-        if mm / ov <= max_mm:
+        if ov in candidates:
+            continue  # already tested in stage 1
+        if _within_mismatch_budget(a[-ov:], b[:ov], ov, max_mm):
             return ov
     return 0
 
@@ -250,8 +308,7 @@ def _internal_anchor_extend_3prime_indexed(contig, pool, kmer_index, unused_set,
                 continue
             contig_region = contig[contig_start:contig_start + overlap_len]
             cand_region = candidate[j:j + overlap_len]
-            mm = sum(x != y for x, y in zip(contig_region, cand_region))
-            if mm / overlap_len <= max_mm:
+            if _within_mismatch_budget(contig_region, cand_region, overlap_len, max_mm):
                 # Selection rule deliberately matches the pre-index
                 # implementation's behavior (verified on real data: 97.2%
                 # identity to a BLAST-confirmed truth over a 1115bp rescue)
@@ -312,8 +369,7 @@ def _internal_anchor_extend_5prime_indexed(contig, pool, kmer_index, unused_set,
             if len(cand_region) < overlap_len:
                 continue
             contig_region = contig[:overlap_len]
-            mm = sum(x != y for x, y in zip(contig_region, cand_region))
-            if mm / overlap_len <= max_mm:
+            if _within_mismatch_budget(contig_region, cand_region, overlap_len, max_mm):
                 # see 3' version: prefer smallest pool index (matches
                 # pre-index behavior), not the single biggest gain
                 sort_key = (idx, -overlap_len)
@@ -623,8 +679,7 @@ def polish_contig(contig, seqs, min_ov=20, max_mm=0.05, seed_k=10,
 
             read_region = cand[read_start:read_start + overlap_len]
             contig_region = contig[contig_start:contig_start + overlap_len]
-            mismatches = sum(x != y for x, y in zip(contig_region, read_region))
-            if mismatches / overlap_len > max_mm:
+            if not _within_mismatch_budget(contig_region, read_region, overlap_len, max_mm):
                 continue
 
             for idx in range(overlap_len):
@@ -903,6 +958,57 @@ class _NullLock(object):
         return False
 
 
+_worker_meta_data1 = None
+_worker_meta_data2 = None
+_worker_lock = None
+
+
+def _init_pool_worker(meta_data1, meta_data2, lock, cfg):
+    """
+    Pool(initializer=...) target: runs once per worker process at pool
+    startup, not once per barcode. meta_data1/meta_data2/lock are sent
+    through the officially-supported process-bootstrap pickling channel
+    (the same one Process(args=...) uses) -- this is the one place a
+    Lock object is actually allowed to be pickled/shared at all.
+
+    Replaces mp.Manager().dict(): a Manager dict instead proxies every
+    single .get(barcode) call through a separate IPC server process --
+    one pickled round trip per barcode, real cost at millions-of-barcodes
+    scale (same fix already applied to denovo_clfr_ram.py's megahit
+    path; this file's own multiprocessing wiring had not been updated to
+    match). NOTE: do NOT instead pass the dicts as per-task starmap/map
+    arguments -- Pool distributes each task's args through its own
+    internal queue and would re-pickle the whole dict on every single
+    task, which is worse than Manager, not better.
+
+    cfg must also be forwarded explicitly (not just meta_data/lock):
+    under the 'fork' start method (Linux default) a worker inherits the
+    parent's already-configure()'d _CFG for free via copy-on-write
+    memory, so this looked unnecessary in local testing -- but under
+    'spawn' (macOS/Windows default, verified empirically here) each
+    worker re-imports this module fresh in a brand new interpreter,
+    resetting _CFG to its hardcoded defaults and silently discarding
+    every configure() call the parent made (min_ctg, out_file, polish
+    settings, everything). Confirmed by reproduction: with configure()
+    called in the parent only, spawned workers tried to write
+    'denovo/final_contigs_0.fa' (the hardcoded default) instead of the
+    configured path.
+    """
+    global _worker_meta_data1, _worker_meta_data2, _worker_lock
+    _worker_meta_data1 = meta_data1
+    _worker_meta_data2 = meta_data2
+    _worker_lock = lock
+    _CFG.update(cfg)
+
+
+def _pool_process_barcode_pe(barcode):
+    process_barcode_pe(barcode, _worker_meta_data1, _worker_meta_data2, _worker_lock)
+
+
+def _pool_process_barcode_se(barcode):
+    process_barcode_se(barcode, _worker_meta_data2, _worker_lock)
+
+
 def _process_pe_metadata(meta_data1, meta_data2, num_processes):
     if num_processes == 1:
         lock = _NullLock()
@@ -910,13 +1016,10 @@ def _process_pe_metadata(meta_data1, meta_data2, num_processes):
             process_barcode_pe(barcode, meta_data1, meta_data2, lock)
     else:
         import multiprocessing as mp
-        with mp.Manager() as manager:
-            shared1 = manager.dict(meta_data1)
-            shared2 = manager.dict(meta_data2)
-            lock = manager.Lock()
-            with mp.Pool(num_processes) as pool:
-                pool.starmap(process_barcode_pe,
-                             [(bc, shared1, shared2, lock) for bc in meta_data2.keys()])
+        lock = mp.Lock()
+        with mp.Pool(num_processes, initializer=_init_pool_worker,
+                     initargs=(meta_data1, meta_data2, lock, dict(_CFG))) as pool:
+            pool.map(_pool_process_barcode_pe, meta_data2.keys())
     print("denovo_BC_counts={}".format(len(meta_data2)))
     return sum(len(v) // 2 for v in meta_data2.values())
 
@@ -928,12 +1031,10 @@ def _process_se_metadata(meta_data2, num_processes):
             process_barcode_se(barcode, meta_data2, lock)
     else:
         import multiprocessing as mp
-        with mp.Manager() as manager:
-            shared2 = manager.dict(meta_data2)
-            lock = manager.Lock()
-            with mp.Pool(num_processes) as pool:
-                pool.starmap(process_barcode_se,
-                             [(bc, shared2, lock) for bc in meta_data2.keys()])
+        lock = mp.Lock()
+        with mp.Pool(num_processes, initializer=_init_pool_worker,
+                     initargs=(None, meta_data2, lock, dict(_CFG))) as pool:
+            pool.map(_pool_process_barcode_se, meta_data2.keys())
     print("denovo_BC_counts={}".format(len(meta_data2)))
     return sum(len(v) // 2 for v in meta_data2.values())
 
