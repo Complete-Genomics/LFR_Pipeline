@@ -8,6 +8,23 @@ For production pipeline, see [cWGS](https://github.com/Complete-Genomics/DNBSEQ_
 
 The stLFR/cLFR technology co-barcodes short reads from the same long DNA fragment for both CoolMPS and StandardMPS sequencing. By clustering reads sharing the same barcode, it delivers pseudo-long-read resolution at the cost of standard short-read sequencing. This positions it as an attractive, cost-effective alternative for large-scale production WGS, bridging the gap between conventional Illumina short reads and more expensive long-read platforms like PacBio.
 
+## Key Engineering Highlights
+
+### De novo assembly tuned for per-UMI reconstruction (`modules/clfr/denovo/`)
+
+Each cLFR UMI barcodes the reads from a single short DNA fragment (typically hundreds of bp to a few kb) — a very different regime from genome- or metagenome-scale assembly. `denovo_seed_olc.py` implements a lightweight greedy Overlap-Layout-Consensus (OLC) assembler purpose-built for this regime, as an alternative to the de Bruijn graph approach (megahit, k=41) used previously:
+
+- **OLC fits the per-UMI problem shape better than a de Bruijn graph.** A de Bruijn graph pays a fixed k-mer-indexing/graph-construction cost that only pays for itself when amortized over genome-scale read depth — at 3M+ UMIs with typically single- to low-double-digit reads each, that fixed cost dominates while the graph abstraction buys little a direct greedy overlap search doesn't already give for free. OLC also degrades gracefully at the lowest depths (down to a single read → a contig, if it clears the length floor), where a de Bruijn graph has no redundancy to build a connected component from at all.
+- **Tuned specifically for 16S rRNA barcode data.** Real 16S reads carry universally-conserved primer regions that can masquerade as overlap signal, plus PCR-chimera artifacts and quality-degraded stretches fused onto otherwise-accurate reads that ordinary boundary-only overlap detection structurally cannot see. An internal-anchor fallback — checked in both directions, covering noise on either the extending read or the seed read's own original edge — locates a real, sufficiently long anchor anywhere inside a read rather than only at its literal ends, recovering contigs that boundary-based overlap alone would miss or truncate. Validated against BLAST-confirmed ground truth (99% identity to the reference 16S sequence) on real production data.
+- **Algorithm and data-structure work to make it production-viable at 3M-UMI scale.** Empirical profiling (not guesswork) found the real bottleneck to be the naive per-candidate mismatch scan — 83%+ of total runtime — rather than the more suspicious-looking internal-anchor fallback; fixed with an early-exit mismatch counter and k-mer-position-derived candidate overlap lengths. A lazily-built, pool-wide k-mer index amortizes anchor lookups across an entire UMI's contig-building attempts instead of rescanning from scratch every time. Multiprocessing uses `Pool(initializer=...)` rather than `mp.Manager()`, so worker processes share barcode data without a per-barcode IPC round trip. Together, this took the estimated single-core cost at 3M UMIs from ~137 hours down to ~60 hours, on top of which the production path parallelizes across cores.
+
+### Reference-guided consensus for mRNA isoform analysis (`modules/clfr/consensus_fasta/`)
+
+When a reference is available (e.g. a known species or transcriptome), `consensus_fasta.py` builds a per-UMI consensus by aligning each fragment's reads to the reference and calling a position-level pileup consensus (via `samtools consensus`), instead of assembling from scratch:
+
+- **Faster than de novo assembly whenever a reference exists** — alignment plus pileup skips graph/overlap construction entirely, since the reference already supplies the structure.
+- **Still preserves real SNVs relative to the reference** — the consensus is called from each fragment's own read pileup, not substituted with reference sequence, so sample-specific variants aren't silently lost.
+
 
 ## Directory Structure
 
