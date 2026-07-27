@@ -291,17 +291,24 @@ def _build_pool_kmer_index(pool, seed_k):
 
 
 def _internal_anchor_extend_3prime_indexed(contig, pool, kmer_index, unused_set,
-                                            min_ov, max_mm, seed_k, min_verify):
+                                            min_ov, max_mm, seed_k, min_verify,
+                                            check_len_override=None):
     """
     Index-accelerated 3' (right-end) internal-anchor extension: looks up
     contig's tail k-mers directly in the pre-built pool-wide index
     instead of rescanning every remaining candidate's full length.
     Only considers candidates whose pool index is still in unused_set.
 
+    check_len_override: search window size in place of the default
+    max(min_ov*3, seed_k*4) -- see internal_anchor_extend_indexed's
+    docstring for why contig-merging needs this to cover the whole
+    contig instead of a read-scale edge window.
+
     Returns (new_contig, used_pool_index) or (None, None).
     """
     n = len(contig)
-    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    requested = check_len_override if check_len_override is not None else max(min_ov * 3, seed_k * 4)
+    check_len = min(n, requested)
     if check_len < seed_k:
         return None, None
 
@@ -317,6 +324,19 @@ def _internal_anchor_extend_3prime_indexed(contig, pool, kmer_index, unused_set,
             contig_start = n - check_len + p
             overlap_len = min(check_len - p, L - j)
             if overlap_len < min_verify:
+                continue
+            if j + overlap_len >= L:
+                # candidate contributes NO new trailing content -- its match
+                # reaches all the way to its own end, so accepting this would
+                # consume the candidate's pool slot for zero gain while
+                # silently discarding whatever unique content it has BEFORE
+                # the anchor (never used by this direction). Only relevant
+                # with a wide check_len_override (contig-merging): read-scale
+                # windows rarely let a whole short read get swallowed this
+                # way, but a shorter sibling contig can look "fully contained"
+                # in exactly this spot and disappear without contributing its
+                # own unique edge. Skip so the candidate stays available for
+                # a direction that might actually use that edge.
                 continue
             contig_region = contig[contig_start:contig_start + overlap_len]
             cand_region = candidate[j:j + overlap_len]
@@ -341,17 +361,21 @@ def _internal_anchor_extend_3prime_indexed(contig, pool, kmer_index, unused_set,
 
 
 def _internal_anchor_extend_5prime_indexed(contig, pool, kmer_index, unused_set,
-                                            min_ov, max_mm, seed_k, min_verify):
+                                            min_ov, max_mm, seed_k, min_verify,
+                                            check_len_override=None):
     """
     Index-accelerated 5' (left-end) internal-anchor extension: symmetric
     counterpart of the 3' version, looking up contig's head k-mers and
     checking whether a candidate's content BEFORE the anchor can be
     prepended.
 
+    check_len_override: see _internal_anchor_extend_3prime_indexed.
+
     Returns (new_contig, used_pool_index) or (None, None).
     """
     n = len(contig)
-    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    requested = check_len_override if check_len_override is not None else max(min_ov * 3, seed_k * 4)
+    check_len = min(n, requested)
     if check_len < seed_k:
         return None, None
 
@@ -365,7 +389,12 @@ def _internal_anchor_extend_5prime_indexed(contig, pool, kmer_index, unused_set,
             candidate = rc(pool[idx]) if is_rc else pool[idx]
             L = len(candidate)
             cand_prefix_start = j - p
-            if cand_prefix_start < 0:
+            if cand_prefix_start <= 0:
+                # <0: candidate doesn't reach back to contig's own start.
+                # ==0: candidate contributes NO new leading content -- see
+                # _internal_anchor_extend_3prime_indexed's symmetric check
+                # for why accepting this would silently discard whatever
+                # unique content the candidate has AFTER the anchor.
                 continue
             # unlike the 3' case (where the verified window naturally runs
             # from the anchor p out to contig's end), here it runs from
@@ -394,7 +423,8 @@ def _internal_anchor_extend_5prime_indexed(contig, pool, kmer_index, unused_set,
 
 
 def _internal_anchor_extend_3prime_reverse_indexed(contig, pool, unused_set,
-                                                     min_ov, max_mm, seed_k, min_verify):
+                                                     min_ov, max_mm, seed_k, min_verify,
+                                                     check_len_override=None):
     """
     Reverse-direction mirror of _internal_anchor_extend_3prime_indexed:
     that function trusts the contig's own tail and searches for an anchor
@@ -418,10 +448,13 @@ def _internal_anchor_extend_3prime_reverse_indexed(contig, pool, unused_set,
     (not the shared pool-wide kmer_index) since this is a rare last-resort
     tried only after both forward directions have already failed.
 
+    check_len_override: see _internal_anchor_extend_3prime_indexed.
+
     Returns (new_contig, used_pool_index) or (None, None).
     """
     n = len(contig)
-    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    requested = check_len_override if check_len_override is not None else max(min_ov * 3, seed_k * 4)
+    check_len = min(n, requested)
     if check_len < seed_k:
         return None, None
 
@@ -456,7 +489,8 @@ def _internal_anchor_extend_3prime_reverse_indexed(contig, pool, unused_set,
 
 
 def _internal_anchor_extend_5prime_reverse_indexed(contig, pool, unused_set,
-                                                     min_ov, max_mm, seed_k, min_verify):
+                                                     min_ov, max_mm, seed_k, min_verify,
+                                                     check_len_override=None):
     """
     Reverse-direction mirror of _internal_anchor_extend_5prime_indexed
     (see _internal_anchor_extend_3prime_reverse_indexed for the general
@@ -470,10 +504,13 @@ def _internal_anchor_extend_5prime_reverse_indexed(contig, pool, unused_set,
     there's no way to tell whether the contig's own un-covered head before
     that point is noise or genuine.
 
+    check_len_override: see _internal_anchor_extend_3prime_indexed.
+
     Returns (new_contig, used_pool_index) or (None, None).
     """
     n = len(contig)
-    check_len = min(n, max(min_ov * 3, seed_k * 4))
+    requested = check_len_override if check_len_override is not None else max(min_ov * 3, seed_k * 4)
+    check_len = min(n, requested)
     if check_len < seed_k:
         return None, None
 
@@ -509,7 +546,8 @@ def _internal_anchor_extend_5prime_reverse_indexed(contig, pool, unused_set,
 
 
 def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
-                                    min_ov, max_mm, seed_k=10, min_verify=60):
+                                    min_ov, max_mm, seed_k=10, min_verify=60,
+                                    check_len_override=None):
     """
     Fallback extension tried only once ordinary boundary suffix/prefix
     extension is fully exhausted for a contig. suffix_prefix_overlap only
@@ -525,6 +563,19 @@ def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
     start; a longer required confirmed stretch guards against spurious
     short matches (e.g. a universally-conserved primer region shared by
     unrelated templates, not a genuine single-molecule overlap).
+
+    check_len_override: search-window size in place of the default
+    max(min_ov*3, seed_k*4). Left at the default (None) for read-scale
+    calls during initial assembly, where a noisy edge is expected to sit
+    only a short distance in from the literal boundary. Passed as a large
+    value (effectively "the whole contig") by _dedupe_and_merge_contigs,
+    which reuses this same fallback to merge already-assembled contigs --
+    real production data showed two contigs' true connection point is
+    routinely hundreds of bp deep into one or both of them (not close to
+    either edge at all, unlike the read-noise case this was originally
+    built for), which the small default window structurally cannot reach.
+    Searching the full contig is affordable here because there are only
+    a handful of contigs per UMI (<=4), unlike the full read pool.
 
     Tries, in order: forward 3' (trust contig's tail, search inside
     candidates), forward 5' (trust contig's head, search inside
@@ -542,23 +593,28 @@ def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
     Returns (new_contig, used_pool_index) or (None, None).
     """
     result = _internal_anchor_extend_3prime_indexed(
-        contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify)
+        contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify,
+        check_len_override)
     if result[0] is not None:
         return result
     result = _internal_anchor_extend_5prime_indexed(
-        contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify)
+        contig, pool, kmer_index, unused_set, min_ov, max_mm, seed_k, min_verify,
+        check_len_override)
     if result[0] is not None:
         return result
     result = _internal_anchor_extend_3prime_reverse_indexed(
-        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify)
+        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify,
+        check_len_override)
     if result[0] is not None:
         return result
     return _internal_anchor_extend_5prime_reverse_indexed(
-        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify)
+        contig, pool, unused_set, min_ov, max_mm, seed_k, min_verify,
+        check_len_override)
 
 
 def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anchor=True,
-                       internal_min_verify=60, kmer_index_holder=None):
+                       internal_min_verify=60, kmer_index_holder=None,
+                       internal_check_len=None):
     """
     Build a single greedy-extended contig from the longest still-available
     read in `pool` (a FIXED list of sequences that is never reindexed --
@@ -586,6 +642,9 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
     fallback attempt (across possibly several _extend_one_contig calls
     for the same UMI) and reused after that. Required (non-None) when
     use_internal_anchor is True.
+
+    internal_check_len: forwarded to internal_anchor_extend_indexed's
+    check_len_override -- see that function's docstring.
     """
     seed_idx = min(available)
     contig = pool[seed_idx]
@@ -641,7 +700,7 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
             kmer_index_holder[0] = _build_pool_kmer_index(pool, seed_k)
         new_contig, used_idx = internal_anchor_extend_indexed(
             contig, pool, kmer_index_holder[0], unused, min_ov, max_mm, seed_k,
-            min_verify=internal_min_verify)
+            min_verify=internal_min_verify, check_len_override=internal_check_len)
         if new_contig is not None:
             contig = new_contig
             unused.remove(used_idx)
@@ -701,22 +760,32 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10, max_conti
     kmer_index_holder = [None]
 
     available = set(range(len(pool)))
-    contigs = []
-    while available and len(contigs) < max_contigs:
+    raw_contigs = []
+    while available and len(raw_contigs) < max_contigs:
         contig, used = _extend_one_contig(pool, available, min_ov, max_mm, seed_k,
                                           use_internal_anchor, internal_min_verify,
                                           kmer_index_holder=kmer_index_holder)
-        if len(contig) >= min_ctg:
-            contigs.append(contig)
+        # collect every attempt regardless of length -- filtering by min_ctg
+        # here (before _dedupe_and_merge_contigs runs) would silently
+        # discard pieces that individually fall short but would merge with
+        # another attempt into something that clears the floor. Verified
+        # on real production data: contigs that look "separate" routinely
+        # share hundreds of bp with each other (see _dedupe_and_merge_contigs),
+        # so min_ctg must apply to the POST-merge result, not each raw attempt.
+        raw_contigs.append(contig)
         # always drop every read the attempt consumed (even just the seed
         # itself, on a failed/orphan attempt) so available strictly shrinks
         # and a genuinely separate fragment among the rest still gets a shot
         available -= used
 
-    return _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k)
+    merged = _dedupe_and_merge_contigs(raw_contigs, min_ov, max_mm, seed_k,
+                                       use_internal_anchor=use_internal_anchor,
+                                       internal_min_verify=internal_min_verify)
+    return [c for c in merged if len(c) >= min_ctg]
 
 
-def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k):
+def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
+                              use_internal_anchor=True, internal_min_verify=60):
     """
     Post-process the contig list from one UMI: the outer loop in
     assemble_umi builds each contig from a single greedy pass, so a read
@@ -728,7 +797,21 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k):
        start) -- these get merged into one longer contig via the same
        suffix/prefix extension logic used for raw reads (a contig is
        just a longer sequence).
-    2. Pure internal containment (one contig sits entirely inside
+    2. A pair's TRUE connection point sits deep inside one or both of
+       them, not at either edge -- ordinary suffix_prefix_overlap only
+       checks literal boundaries so it can't see this. Verified on real
+       production data (a 1.5kb-library run): most multi-contig UMIs had
+       200-750bp of genuine shared sequence between their separate
+       contigs, sitting hundreds of bp from either edge -- these are
+       independently-grown pieces of the same underlying molecule that
+       ordinary boundary merging can't reconnect. Uses the same
+       internal-anchor fallback built for noisy read edges, but with
+       check_len_override effectively covering each WHOLE contig (a
+       handful of contigs per UMI, so full-length search is cheap) --
+       the default read-scale window is far too narrow to reach a
+       connection point hundreds of bp deep into a several-hundred-bp
+       contig.
+    3. Pure internal containment (one contig sits entirely inside
        another, not at either edge -- suffix_prefix_overlap only checks
        boundaries so it won't catch this) -- the contained one adds no
        new sequence, so it's simply dropped.
@@ -736,20 +819,24 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k):
     if len(contigs) <= 1:
         return contigs
 
-    # 1. merge any pair with a real boundary overlap. use_internal_anchor=False:
-    # already-assembled contigs have clean, verified boundaries (either from
-    # normal extension or a verified anchor merge), so the noisy-read-edge
-    # rescue this fallback exists for doesn't apply here.
+    # 1+2. merge any pair with a real boundary overlap, or a genuine
+    # internal connection point found via the internal-anchor fallback
+    # (see case 2 above for why this needs use_internal_anchor=True with
+    # a full-contig check_len, unlike the read-level default).
     pool = sorted(set(contigs), key=lambda s: (-len(s), s))
     available = set(range(len(pool)))
+    kmer_index_holder = [None]
     merged = []
     while available:
         contig, used = _extend_one_contig(pool, available, min_ov, max_mm, seed_k,
-                                          use_internal_anchor=False)
+                                          use_internal_anchor=use_internal_anchor,
+                                          internal_min_verify=internal_min_verify,
+                                          kmer_index_holder=kmer_index_holder,
+                                          internal_check_len=max(len(s) for s in pool))
         merged.append(contig)
         available -= used
 
-    # 2. drop pure containment (substring anywhere, not just at a boundary)
+    # 3. drop pure containment (substring anywhere, not just at a boundary)
     merged.sort(key=len, reverse=True)
     final = []
     for c in merged:

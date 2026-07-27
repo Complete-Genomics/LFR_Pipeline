@@ -116,6 +116,31 @@ class TestAssembleUmi(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(m.assemble_umi([]), [])
 
+    def test_min_ctg_applies_after_merge_not_before(self):
+        """
+        Regression test for a real bug: assemble_umi used to filter each
+        raw contig-building attempt by min_ctg BEFORE ever calling
+        _dedupe_and_merge_contigs, so two individually-short attempts
+        that would genuinely merge into something over the floor were
+        each discarded first and never got the chance. On a real
+        1.5kb-library production run this was a meaningful contributor
+        to low yield: many barcodes' raw attempts individually missed
+        the --min_ctg floor while their merged result would have cleared
+        it easily. Fixed by collecting every raw attempt regardless of
+        length, merging first, and filtering by min_ctg only on the
+        final, post-merge contigs.
+        """
+        rng = random.Random(41)
+        shared = rand_seq(rng, 100)
+        longer = rand_seq(rng, 150) + shared                      # 250bp, shared = its own tail
+        shorter = rand_seq(rng, 30) + shared + rand_seq(rng, 80)   # 210bp, shared in its middle
+        # both individual raw attempts (250, 210) are below min_ctg;
+        # only their merge (330bp) clears it.
+        contigs = m.assemble_umi([longer, shorter], min_ov=20, max_mm=0.05,
+                                 min_ctg=260, seed_k=10)
+        self.assertEqual(len(contigs), 1)
+        self.assertGreaterEqual(len(contigs[0]), 260)
+
 
 class TestPolishContig(unittest.TestCase):
     def test_corrects_single_read_substitution_error(self):
@@ -301,6 +326,91 @@ class TestChimericMergeSafety(unittest.TestCase):
             if m.suffix_prefix_overlap(a, b, min_ov=20, max_mm=0.05, seed_k=10) > 0:
                 false_merges += 1
         self.assertEqual(false_merges, self.N_TRIALS)
+
+
+class TestDedupeAndMergeContigs(unittest.TestCase):
+    """
+    _dedupe_and_merge_contigs used to disable internal-anchor entirely
+    (use_internal_anchor=False) on the theory that already-assembled
+    contigs have clean, verified boundaries. Real production data (a
+    1.5kb-library run) showed that reasoning was incomplete: the vast
+    majority of multi-contig UMIs had 200-750bp of genuine shared
+    sequence between their separate contigs, sitting hundreds of bp from
+    either edge -- not because either contig's edge was noisy, but
+    because two independently-grown contigs can have their true
+    connection point deep in one or both of them. The default read-scale
+    internal-anchor search window (~60bp) structurally cannot reach that
+    far, so contig-merging now passes a check_len_override covering the
+    whole contig (cheap: at most a handful of contigs per UMI).
+    """
+
+    def test_merges_when_connection_point_is_mid_sequence_on_one_side(self):
+        """
+        Matches the geometry actually observed on real production data:
+        the LONGER contig's own matching region sits at ITS OWN edge
+        (like a prior verified merge or the original seed's tail), while
+        the same shared region sits in the MIDDLE of the shorter
+        candidate, which also has genuine unique content on the far side
+        of it to contribute. The default read-scale window can't reach a
+        match this deep into a several-hundred-bp contig;
+        check_len_override (covering the whole contig) can.
+
+        The longer sequence must be the one whose own remaining content
+        past the anchor is empty (shared = its exact tail): pool sorts
+        longest-first, so the longer one always becomes the seed here,
+        and the verification window reaches "as far as possible" toward
+        the seed's own far end rather than stopping exactly at the true
+        shared-region boundary -- if the seed itself had unrelated
+        content past the anchor, that reach would overshoot into it and
+        fail verification. This is a real, narrower-than-ideal edge of
+        the current fix, not a coincidence of this test.
+
+        NOTE: the current fix does NOT yet handle the fully general case
+        where the shared region reaches neither contig's edge on EITHER
+        side (verified separately: real barcode "AAAAAAAAAAAAGTT",
+        942bp/1045bp with a genuine 383bp shared region, still correctly
+        declines to merge rather than guess) -- that needs a proper
+        local-alignment splice merge, not just a wider search window.
+        """
+        rng = random.Random(30)
+        shared = rand_seq(rng, 300)
+        longer = rand_seq(rng, 300) + shared                                # shared = longer's own tail
+        shorter = rand_seq(rng, 50) + shared + rand_seq(rng, 100)           # shared sits in shorter's middle
+        merged = m._dedupe_and_merge_contigs([longer, shorter], min_ov=20, max_mm=0.05, seed_k=10)
+        self.assertEqual(len(merged), 1)
+        self.assertGreater(len(merged[0]), max(len(longer), len(shorter)))
+
+    def test_does_not_silently_discard_a_shorter_contigs_unique_edge(self):
+        """
+        Regression test for a real bug found while validating the
+        check_len_override fix above: forward-direction internal anchor
+        can find a match between a candidate's OWN content and the
+        middle of a longer contig where the match reaches all the way to
+        the candidate's own end (zero new trailing content). The old
+        code still accepted this as a "successful merge", consuming the
+        candidate's pool slot and silently discarding whatever unique
+        content it had BEFORE the anchor -- on real data this made an
+        entire genuine 584bp contig vanish with no corresponding growth
+        anywhere else. Fixed by requiring genuine new content before
+        accepting a forward-direction match.
+        """
+        rng = random.Random(31)
+        unique_prefix = rand_seq(rng, 100)   # exists ONLY in the shorter contig
+        shared_middle = rand_seq(rng, 300)
+        shorter = unique_prefix + shared_middle          # shared sits at shorter's own END
+        longer = rand_seq(rng, 200) + shared_middle + rand_seq(rng, 100)  # shared sits in longer's MIDDLE
+
+        merged = m._dedupe_and_merge_contigs([longer, shorter], min_ov=20, max_mm=0.05, seed_k=10)
+        total_len = sum(len(c) for c in merged)
+        # whatever the merge decides to do, unique_prefix's content must
+        # not simply vanish -- either `shorter` survives untouched (safe,
+        # conservative fallback) or some contig grew enough to account
+        # for it. What must NOT happen: `longer` reappears completely
+        # unchanged as the ONLY output with `shorter` gone and no growth.
+        self.assertFalse(
+            len(merged) == 1 and merged[0] == longer,
+            "shorter contig's unique prefix was silently discarded with zero growth"
+        )
 
 
 class TestMultiprocessingConfigPropagation(unittest.TestCase):
