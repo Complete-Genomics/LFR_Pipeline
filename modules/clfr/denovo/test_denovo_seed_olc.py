@@ -14,6 +14,7 @@ import sys
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import denovo_seed_olc as m
@@ -53,6 +54,28 @@ class TestSuffixPrefixOverlap(unittest.TestCase):
         b = "".join(mutated) + rand_seq(rng, 20)
         self.assertEqual(m.suffix_prefix_overlap(a, b, min_ov=20, max_mm=0.05), 0)
 
+    def test_boundary_index_never_hides_a_valid_overlap(self):
+        pool = [
+            "TTTTTTTTTTACGTACGTACGTACGTAC",
+            "ACGTACGTACGTACGTACGGGGGGGGGG",
+            "CCCCCCCCCCGTACGTACGTACGTACGT",
+            "GATCGATCGATCGATCGATCGATCGATC",
+        ]
+        index = m._build_boundary_kmer_index(pool, min_ov=20, seed_k=10)
+        available = set(range(len(pool)))
+
+        for contig in pool:
+            indexed = m._boundary_overlap_candidates(
+                contig, available, index, min_ov=20, seed_k=10)
+            for idx, seq in enumerate(pool):
+                valid = any(
+                    m.suffix_prefix_overlap(contig, cand, 20, 0.05, 10)
+                    or m.suffix_prefix_overlap(cand, contig, 20, 0.05, 10)
+                    for cand in (seq, m.rc(seq))
+                )
+                if valid:
+                    self.assertIn(idx, indexed)
+
 
 class TestWithinMismatchBudget(unittest.TestCase):
     """
@@ -85,6 +108,24 @@ class TestWithinMismatchBudget(unittest.TestCase):
 
 
 class TestAssembleUmi(unittest.TestCase):
+    def test_all_raw_components_reach_post_assembly_merge(self):
+        rng = random.Random(47)
+        reads = [rand_seq(rng, 100) for _ in range(8)]
+        # The deterministic random reads have no 20 bp suffix/prefix overlap,
+        # so each must reach post-assembly merge.  The final-output cap belongs
+        # in _write_contigs(), not this raw-component phase.
+        self.assertEqual(len(m.assemble_umi(reads, min_ctg=100)), 8)
+
+    def test_writer_keeps_all_eight_configured_components(self):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        try:
+            m._write_contigs("BC", ["A" * 100] * 8, tmp.name, m._NullLock(), 8)
+            with open(tmp.name) as handle:
+                self.assertEqual(sum(line.startswith(">") for line in handle), 8)
+        finally:
+            os.unlink(tmp.name)
+
     def test_hi_depth_full_reconstruction(self):
         rng = random.Random(4)
         truth = rand_seq(rng, 600)
@@ -104,6 +145,7 @@ class TestAssembleUmi(unittest.TestCase):
         read = rand_seq(rng, 100)
         contigs = m.assemble_umi([read], min_ctg=400)
         self.assertEqual(contigs, [])
+
 
     def test_reverse_complement_read_merges(self):
         rng = random.Random(7)
@@ -140,6 +182,137 @@ class TestAssembleUmi(unittest.TestCase):
                                  min_ctg=260, seed_k=10)
         self.assertEqual(len(contigs), 1)
         self.assertGreaterEqual(len(contigs[0]), 260)
+
+
+class TestCollectiveAnchorRescue(unittest.TestCase):
+    def _add_spaced_errors(self, seq, first, step):
+        mutated = list(seq)
+        for pos in range(first, len(mutated), step):
+            mutated[pos] = "A" if mutated[pos] != "A" else "C"
+        return "".join(mutated)
+
+    def test_redundant_noisy_reads_extend_without_relaxing_pairwise_mismatch(self):
+        """
+        The seed and each tiling read have staggered independent errors.  Their
+        real suffix/prefix overlaps are all just above the 5% pairwise mismatch
+        ceiling, so ordinary OLC correctly refuses them.  Multiple exact 17-mer
+        anchors still place three reads coherently; their shared extension is
+        then supported by a pileup rather than a relaxed mismatch threshold.
+        """
+        rng = random.Random(51)
+        truth = rand_seq(rng, 500)
+        reads = [
+            self._add_spaced_errors(truth[:300], 5, 35),
+            self._add_spaced_errors(truth[150:350], 20, 35),
+            self._add_spaced_errors(truth[200:400], 20, 35),
+            self._add_spaced_errors(truth[250:450], 20, 35),
+            self._add_spaced_errors(truth[300:500], 20, 35),
+        ]
+
+        baseline = m.assemble_umi(reads, min_ov=20, max_mm=0.05,
+                                  min_ctg=100, use_collective_rescue=False)
+        rescued = m.assemble_umi(reads, min_ov=20, max_mm=0.05,
+                                 min_ctg=100, use_collective_rescue=True)
+        self.assertLessEqual(max(map(len, baseline)), 350)
+        self.assertGreaterEqual(max(map(len, rescued)), 450)
+        self.assertGreater(max(map(len, rescued)), max(map(len, baseline)))
+
+    def test_consumed_reads_can_vote_without_being_consumed_twice(self):
+        rng = random.Random(52)
+        truth = rand_seq(rng, 400)
+        contig = truth[:300]
+        pool = [truth[150:400], truth[150:400]]
+        index = m._build_pool_kmer_index(pool, m._COLLECTIVE_ANCHOR_K)
+
+        rescued, used = m._collective_anchor_extend(
+            contig, pool, index, candidate_set=set(),
+            evidence_set={0, 1})
+
+        self.assertEqual(rescued, truth)
+        self.assertEqual(used, set())
+
+    def test_evidence_only_extension_cannot_repeat_without_progress(self):
+        rng = random.Random(54)
+        pool = sorted([rand_seq(rng, 100), rand_seq(rng, 100)],
+                      key=lambda seq: (-len(seq), seq))
+
+        def evidence_only(contig, pool_, index, candidates, evidence_set=None):
+            if evidence_set is None:
+                return None, set()
+            return contig + "A", set()
+
+        with mock.patch.object(m, "_collective_anchor_extend",
+                               side_effect=evidence_only):
+            contig, used = m._extend_one_contig(
+                pool, set(range(len(pool))), min_ov=20, max_mm=0.05,
+                seed_k=10, use_internal_anchor=False,
+                collective_index_holder=[{}],
+                collective_evidence_set=set(range(len(pool))),
+                boundary_index=m._build_boundary_kmer_index(pool, 20, 10))
+
+        self.assertEqual(contig, pool[0])
+        self.assertEqual(used, {0})
+
+    def test_collective_rescue_does_not_rewrite_draft_interior(self):
+        rng = random.Random(53)
+        truth = rand_seq(rng, 400)
+        draft = list(truth[:300])
+        draft[100] = "A" if draft[100] != "A" else "C"
+        draft = "".join(draft)
+        pool = [truth[50:400], truth[50:400]]
+        index = m._build_pool_kmer_index(pool, m._COLLECTIVE_ANCHOR_K)
+
+        rescued, _ = m._collective_anchor_extend(
+            draft, pool, index, candidate_set={0, 1})
+
+        self.assertEqual(rescued[:len(draft)], draft)
+        self.assertEqual(len(rescued), len(truth))
+
+
+class TestCrossAttemptEvidenceToggle(unittest.TestCase):
+    """
+    use_cross_attempt_evidence controls whether collective rescue may vote
+    using reads already consumed by earlier raw-building attempts for the
+    same UMI (True, the wider-evidence behaviour), or only the current
+    attempt's own leftover reads (False, the original candidate-only
+    semantics). A full 20k real-data run with this True showed both
+    lengthened AND shortened main contigs vs the old baseline (lfr.md
+    section 21) -- this toggle exists so a dedicated 20k A/B can isolate
+    that effect instead of conflating it with unrelated speed fixes.
+    """
+
+    def test_defaults_to_on_everywhere(self):
+        import inspect
+        self.assertTrue(
+            inspect.signature(m.assemble_umi).parameters["use_cross_attempt_evidence"].default)
+        self.assertTrue(
+            inspect.signature(m.configure).parameters["use_cross_attempt_evidence"].default)
+        self.assertTrue(m._CFG["use_cross_attempt_evidence"])
+
+    def test_false_restricts_evidence_set_to_none_regardless_of_pool_size(self):
+        rng = random.Random(60)
+        # small pool (<= _COLLECTIVE_MAX_CROSS_ATTEMPT_READS) would normally
+        # get the full-pool evidence set when the toggle is on.
+        seqs = [rand_seq(rng, 300) for _ in range(3)]
+        captured = []
+
+        def record_and_stop(pool, available, *args, **kwargs):
+            captured.append(kwargs.get("collective_evidence_set"))
+            seed_idx = min(available)
+            return pool[seed_idx], set(available)
+
+        with mock.patch.object(m, "_extend_one_contig", side_effect=record_and_stop):
+            m.assemble_umi(seqs, min_ctg=1, use_cross_attempt_evidence=True)
+            m.assemble_umi(seqs, min_ctg=1, use_cross_attempt_evidence=False)
+
+        self.assertIsNotNone(captured[0], "on: small pool should get a full-pool evidence set")
+        self.assertIsNone(captured[1], "off: must restrict to candidate-only regardless of pool size")
+
+    def test_cli_flag_wired_to_configure(self):
+        m.configure(use_cross_attempt_evidence=False)
+        self.assertFalse(m._CFG["use_cross_attempt_evidence"])
+        m.configure(use_cross_attempt_evidence=True)
+        self.assertTrue(m._CFG["use_cross_attempt_evidence"])
 
 
 class TestPolishContig(unittest.TestCase):
@@ -203,7 +376,7 @@ class TestInternalAnchorReverse(unittest.TestCase):
         candidate = clean + true_tail + new_seq
 
         new_contig, idx = m._internal_anchor_extend_3prime_reverse_indexed(
-            contig, [candidate], {0},
+            contig, [candidate], m._build_pool_kmer_index([candidate], 10), {0},
             min_ov=250, max_mm=0.05, seed_k=10, min_verify=60)
         self.assertIsNotNone(new_contig)
         self.assertEqual(new_contig, clean + true_tail + new_seq)
@@ -218,7 +391,7 @@ class TestInternalAnchorReverse(unittest.TestCase):
         candidate = new_seq + true_head + clean
 
         new_contig, idx = m._internal_anchor_extend_5prime_reverse_indexed(
-            contig, [candidate], {0},
+            contig, [candidate], m._build_pool_kmer_index([candidate], 10), {0},
             min_ov=250, max_mm=0.05, seed_k=10, min_verify=60)
         self.assertIsNotNone(new_contig)
         self.assertEqual(new_contig, new_seq + true_head + clean)
@@ -237,7 +410,8 @@ class TestInternalAnchorReverse(unittest.TestCase):
         short_candidate = clean[-100:]  # anchors, but doesn't reach past clean's own end
 
         new_contig, idx = m._internal_anchor_extend_3prime_reverse_indexed(
-            contig, [short_candidate], {0},
+            contig, [short_candidate],
+            m._build_pool_kmer_index([short_candidate], 10), {0},
             min_ov=250, max_mm=0.05, seed_k=10, min_verify=60)
         self.assertIsNone(new_contig)
 
@@ -294,14 +468,16 @@ class TestChimericMergeSafety(unittest.TestCase):
             contig3 = real_a + motif
             cand3 = motif + real_b
             new3, _ = m._internal_anchor_extend_3prime_reverse_indexed(
-                contig3, [cand3], {0}, min_ov=20, max_mm=0.05, seed_k=10, min_verify=60)
+                contig3, [cand3], m._build_pool_kmer_index([cand3], 10), {0},
+                min_ov=20, max_mm=0.05, seed_k=10, min_verify=60)
             if new3 is not None:
                 false_3p += 1
 
             contig5 = motif + real_a
             cand5 = real_b + motif
             new5, _ = m._internal_anchor_extend_5prime_reverse_indexed(
-                contig5, [cand5], {0}, min_ov=20, max_mm=0.05, seed_k=10, min_verify=60)
+                contig5, [cand5], m._build_pool_kmer_index([cand5], 10), {0},
+                min_ov=20, max_mm=0.05, seed_k=10, min_verify=60)
             if new5 is not None:
                 false_5p += 1
         self.assertEqual(false_3p, 0)
@@ -326,6 +502,49 @@ class TestChimericMergeSafety(unittest.TestCase):
             if m.suffix_prefix_overlap(a, b, min_ov=20, max_mm=0.05, seed_k=10) > 0:
                 false_merges += 1
         self.assertEqual(false_merges, self.N_TRIALS)
+
+
+class TestMinimizerDedup(unittest.TestCase):
+    """
+    Regression test for a real production bug: _minimizer_dedupe's single
+    global canonical minimizer per read is a much weaker signal than real
+    minimizer-based dedup tools use, and on 16S data specifically an
+    AT-rich conserved motif can easily BE the lexicographically smallest
+    k-mer in many otherwise completely different reads that tile unrelated
+    true positions and share nothing else. Confirmed at full production
+    scale with this dedup enabled by default: total contigs 124,240 ->
+    109,039, >=1kb contigs 21,139 -> 17,595, net length change ~-1.06 Mb
+    versus the prior baseline. use_minimizer_dedup now defaults to False
+    everywhere (assemble_umi, _CFG, configure(), the CLI) until the
+    single-minimizer collision risk is fixed (e.g. windowed/multiple
+    minimizers, or verifying actual shared sequence length before
+    collapsing) and re-validated at full scale.
+    """
+
+    def test_conserved_motif_collapses_genuinely_distinct_reads(self):
+        rng = random.Random(80)
+        conserved_kmer = "A" * 21  # lexicographically minimal -- plausible in real AT-rich conserved stretches
+        reads = []
+        for _ in range(5):
+            unique_part = rand_seq(rng, 500)
+            reads.append(unique_part[:250] + conserved_kmer + unique_part[250:])
+
+        minimizers = {m._canonical_minimizer(r, k=21) for r in reads}
+        self.assertEqual(len(minimizers), 1,
+                          "test setup assumption broken: reads no longer share one minimizer")
+
+        deduped = m._minimizer_dedupe(reads, k=21, keep_n=2)
+        self.assertEqual(len(deduped), 2,
+                          "documents the known failure mode -- 3 of 5 genuinely distinct "
+                          "reads are silently discarded. This is NOT a passing bar to defend; "
+                          "it exists so a future redesign fixing this is a deliberate, visible "
+                          "change to this assertion, not a silent behavior drift.")
+
+    def test_defaults_to_off_everywhere(self):
+        import inspect
+        self.assertFalse(inspect.signature(m.assemble_umi).parameters["use_minimizer_dedup"].default)
+        self.assertFalse(inspect.signature(m.configure).parameters["use_minimizer_dedup"].default)
+        self.assertFalse(m._CFG["use_minimizer_dedup"])
 
 
 class TestDedupeAndMergeContigs(unittest.TestCase):
