@@ -315,6 +315,44 @@ class TestCrossAttemptEvidenceToggle(unittest.TestCase):
         self.assertTrue(m._CFG["use_cross_attempt_evidence"])
 
 
+class TestCliArgDefaultsEndToEnd(unittest.TestCase):
+    """
+    Regression test for a real bug: the CLI used to wire
+    use_minimizer_dedup=not args.no_minimizer_dedup. --no_minimizer_dedup is
+    an opt-OUT flag (action="store_true", default False when absent), so
+    running the CLI with NO dedup-related flag at all -- e.g. the exact
+    command line used for the real 1.5M production run -- silently computed
+    use_minimizer_dedup=True and re-enabled a feature already confirmed (see
+    TestMinimizerDedup) to corrupt real 16S assemblies, even though
+    assemble_umi/configure/_CFG's own signatures all default to False.
+    inspect.signature checks alone (TestMinimizerDedup.test_defaults_to_off_everywhere)
+    could not catch this because they never exercise argparse or the
+    args-to-configure() mapping -- only an end-to-end parse+map test can.
+    Fixed by making minimizer dedup an explicit opt-in flag instead
+    (--minimizer_dedup, default False, matching every other default).
+    """
+
+    def _configure_kwargs(self, argv):
+        captured = {}
+        with mock.patch.object(m, "configure", side_effect=lambda **kw: captured.update(kw)):
+            args = m._build_arg_parser().parse_args(argv)
+            m._configure_from_args(args)
+        return captured
+
+    def test_no_flags_matches_every_other_default(self):
+        kwargs = self._configure_kwargs(["--sequence_type", "se"])
+        self.assertFalse(kwargs["use_minimizer_dedup"],
+                          "running with no dedup flag must NOT silently re-enable "
+                          "the confirmed-broken minimizer dedup")
+        self.assertTrue(kwargs["use_cross_attempt_evidence"])
+
+    def test_explicit_opt_in_flags_flip_correctly(self):
+        kwargs = self._configure_kwargs(
+            ["--sequence_type", "se", "--minimizer_dedup", "--no_cross_attempt_evidence"])
+        self.assertTrue(kwargs["use_minimizer_dedup"])
+        self.assertFalse(kwargs["use_cross_attempt_evidence"])
+
+
 class TestPolishContig(unittest.TestCase):
     def test_corrects_single_read_substitution_error(self):
         rng = random.Random(8)

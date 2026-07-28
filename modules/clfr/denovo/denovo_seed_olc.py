@@ -1685,10 +1685,8 @@ def _process_se_metadata(meta_data2, num_processes):
 
 # ── standalone pipeline CLI ───────────────────────────────────────────────────
 
-def _main_cli():
+def _build_arg_parser():
     import argparse
-    import datetime
-    import subprocess
 
     ap = argparse.ArgumentParser(
         description="Standalone per-UMI seed-extension assembler (no megahit, no subprocess fork)")
@@ -1714,22 +1712,46 @@ def _main_cli():
                     help="min confirmed overlap length for the internal-anchor fallback [60]")
     ap.add_argument("--max_contigs", type=int, default=8,
                     help="maximum final contigs emitted per UMI after merge/dedupe [8]")
-    ap.add_argument("--no_minimizer_dedup", action="store_true",
-                    help="skip near-identical-read collapsing before assembly (on by default)")
+    ap.add_argument("--minimizer_dedup", action="store_true",
+                    help="collapse near-identical reads (same canonical minimizer) before "
+                         "assembly -- OFF by default: confirmed to collapse genuinely-distinct "
+                         "reads sharing a conserved motif on real 16S data, see "
+                         "_canonical_minimizer's docstring. Opt-in only, for experimentation")
     ap.add_argument("--no_cross_attempt_evidence", action="store_true",
                     help="restrict collective rescue to the current attempt's own "
                          "leftover reads only, disabling cross-attempt evidence "
                          "sharing (on by default; see assemble_umi docstring)")
-    args = ap.parse_args()
+    return ap
 
+
+def _configure_from_args(args):
+    """
+    Maps parsed CLI args to configure() kwargs -- pulled out of _main_cli so
+    tests can verify the actual end-to-end default (e.g. "no flags passed")
+    without running the whole read-streaming pipeline. This mapping is the
+    exact spot a real bug lived in before: --no_minimizer_dedup (an opt-OUT
+    flag) meant "flag absent" silently forced use_minimizer_dedup=True via
+    `not args.no_minimizer_dedup`, re-enabling a feature confirmed to corrupt
+    real 16S assemblies, even though assemble_umi/configure/_CFG's own
+    defaults all say False. Fixed by making minimizer dedup an explicit
+    opt-IN flag (--minimizer_dedup, default False) instead.
+    """
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
               max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
               polish=not args.no_polish,
               use_internal_anchor=not args.no_internal_anchor,
               internal_min_verify=args.internal_min_verify,
               max_contigs=args.max_contigs,
-              use_minimizer_dedup=not args.no_minimizer_dedup,
+              use_minimizer_dedup=args.minimizer_dedup,
               use_cross_attempt_evidence=not args.no_cross_attempt_evidence)
+
+
+def _main_cli():
+    import datetime
+    import subprocess
+
+    args = _build_arg_parser().parse_args()
+    _configure_from_args(args)
 
     if not os.path.isdir("denovo"):
         os.makedirs("denovo")
