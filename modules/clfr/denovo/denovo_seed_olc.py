@@ -1695,6 +1695,17 @@ def _pool_process_barcode_se(barcode):
 
 
 def _process_pe_metadata(meta_data1, meta_data2, num_processes):
+    """
+    chunksize=1: per-barcode cost varies enormously (a few ms for a typical
+    UMI vs multiple seconds for a high-depth/pathological one). Pool.map's
+    default chunksize hands each worker a large contiguous slice of the
+    barcode list up front; if even one slow barcode lands in a worker's
+    slice, that whole slice blocks while every other worker sits idle
+    waiting for the next chunk boundary -- confirmed in production via
+    `ps` showing the active-worker count visibly drop mid-chunk instead of
+    staying near num_processes throughout. chunksize=1 makes every worker
+    pull one barcode at a time so slow barcodes only ever block themselves.
+    """
     if num_processes == 1:
         lock = _NullLock()
         for barcode in meta_data2.keys():
@@ -1704,7 +1715,7 @@ def _process_pe_metadata(meta_data1, meta_data2, num_processes):
         lock = mp.Lock()
         with mp.Pool(num_processes, initializer=_init_pool_worker,
                      initargs=(meta_data1, meta_data2, lock, dict(_CFG))) as pool:
-            pool.map(_pool_process_barcode_pe, meta_data2.keys())
+            pool.map(_pool_process_barcode_pe, meta_data2.keys(), chunksize=1)
     print("denovo_BC_counts={}".format(len(meta_data2)))
     return sum(len(v) // 2 for v in meta_data2.values())
 
@@ -1719,7 +1730,7 @@ def _process_se_metadata(meta_data2, num_processes):
         lock = mp.Lock()
         with mp.Pool(num_processes, initializer=_init_pool_worker,
                      initargs=(None, meta_data2, lock, dict(_CFG))) as pool:
-            pool.map(_pool_process_barcode_se, meta_data2.keys())
+            pool.map(_pool_process_barcode_se, meta_data2.keys(), chunksize=1)
     print("denovo_BC_counts={}".format(len(meta_data2)))
     return sum(len(v) // 2 for v in meta_data2.values())
 
