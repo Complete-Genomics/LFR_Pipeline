@@ -317,19 +317,24 @@ class TestCrossAttemptEvidenceToggle(unittest.TestCase):
 
 class TestCliArgDefaultsEndToEnd(unittest.TestCase):
     """
-    Regression test for a real bug: the CLI used to wire
-    use_minimizer_dedup=not args.no_minimizer_dedup. --no_minimizer_dedup is
-    an opt-OUT flag (action="store_true", default False when absent), so
-    running the CLI with NO dedup-related flag at all -- e.g. the exact
-    command line used for the real 1.5M production run -- silently computed
-    use_minimizer_dedup=True and re-enabled a feature already confirmed (see
-    TestMinimizerDedup) to corrupt real 16S assemblies, even though
-    assemble_umi/configure/_CFG's own signatures all default to False.
-    inspect.signature checks alone (TestMinimizerDedup.test_defaults_to_off_everywhere)
-    could not catch this because they never exercise argparse or the
-    args-to-configure() mapping -- only an end-to-end parse+map test can.
-    Fixed by making minimizer dedup an explicit opt-in flag instead
-    (--minimizer_dedup, default False, matching every other default).
+    Regression test for two real bugs found via a production incident:
+    1. The CLI used to wire use_minimizer_dedup=not args.no_minimizer_dedup.
+       --no_minimizer_dedup is an opt-OUT flag (action="store_true", default
+       False when absent), so running the CLI with NO dedup-related flag at
+       all -- e.g. the exact command line used for the real 1.5M production
+       run -- silently computed use_minimizer_dedup=True and re-enabled a
+       feature already confirmed (see TestMinimizerDedup) to corrupt real
+       16S assemblies, even though assemble_umi/configure/_CFG's own
+       signatures all default to False.
+    2. use_mappy had no CLI flag at all and defaulted to None ("auto-detect
+       and prefer if importable"). A real 1.5M production run silently took
+       the mappy path (see _assemble_umi_mappy's docstring) the whole time
+       because the server happened to have mappy installed, making every
+       assemble_umi fix a no-op in production without anyone intending it.
+    inspect.signature checks alone could not catch either because they
+    never exercise argparse or the args-to-configure() mapping -- only an
+    end-to-end parse+map test can. Fixed by making both explicit opt-in
+    flags (--minimizer_dedup, --mappy; both default False).
     """
 
     def _configure_kwargs(self, argv):
@@ -344,13 +349,23 @@ class TestCliArgDefaultsEndToEnd(unittest.TestCase):
         self.assertFalse(kwargs["use_minimizer_dedup"],
                           "running with no dedup flag must NOT silently re-enable "
                           "the confirmed-broken minimizer dedup")
+        self.assertFalse(kwargs["use_mappy"],
+                          "running with no mappy flag must NOT silently prefer the "
+                          "unhardened mappy path just because it happens to be importable")
         self.assertTrue(kwargs["use_cross_attempt_evidence"])
 
     def test_explicit_opt_in_flags_flip_correctly(self):
         kwargs = self._configure_kwargs(
-            ["--sequence_type", "se", "--minimizer_dedup", "--no_cross_attempt_evidence"])
+            ["--sequence_type", "se", "--minimizer_dedup", "--mappy",
+             "--no_cross_attempt_evidence"])
         self.assertTrue(kwargs["use_minimizer_dedup"])
+        self.assertTrue(kwargs["use_mappy"])
         self.assertFalse(kwargs["use_cross_attempt_evidence"])
+
+    def test_use_mappy_defaults_to_false_everywhere(self):
+        import inspect
+        self.assertFalse(inspect.signature(m.configure).parameters["use_mappy"].default)
+        self.assertFalse(m._CFG["use_mappy"])
 
 
 class TestPolishContig(unittest.TestCase):

@@ -129,7 +129,17 @@ _CFG = {
     "out_id":    0,
     "out_file":  "denovo/final_contigs_{id}.fa",
     "seed_k":    10,    # k-mer size for overlap pre-filter
-    "use_mappy": None,  # None = auto-detect, True/False = force
+    "use_mappy": False,  # OFF by default: _assemble_umi_mappy has none of assemble_umi's
+                         # correctness hardening (no mismatch-rate check, no chimeric-merge
+                         # safety, always collapses a barcode to a single contig with no
+                         # multi-fragment/collision handling, no low-depth single-read
+                         # support) and every fix validated across this project's history
+                         # only applies to assemble_umi. A real 1.5M production run was
+                         # confirmed to silently take this path whenever the environment
+                         # happened to have `mappy` importable (auto-detect via None),
+                         # making every one of those fixes a no-op in production without
+                         # anyone intending it. None = auto-detect (legacy; do not use for
+                         # production), True/False = force.
     "polish":              True,  # majority-vote consensus correction after assembly
     "polish_min_coverage": 3,     # min total votes (incl. 1 implicit vote for original base) to consider flipping
     "polish_vote_concordance": 0.6,  # winning base must hold >= this fraction of votes to flip
@@ -143,7 +153,7 @@ _CFG = {
 
 
 def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
-              out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=None,
+              out_id=0, out_file="denovo/final_contigs_{id}.fa", use_mappy=False,
               polish=True, polish_min_coverage=3, polish_vote_concordance=0.6,
               polish_kmer_step=5, use_internal_anchor=True, internal_min_verify=60,
               max_contigs=8, use_minimizer_dedup=False,
@@ -1344,6 +1354,37 @@ def _assemble_umi_mappy(seqs, min_ctg):
     """
     Overlap detection via mappy (minimap2 Python bindings).
     Returns contig list, or None if mappy unavailable / fails.
+
+    CONFIRMED PRODUCTION INCIDENT: this path has none of assemble_umi's
+    correctness hardening and was NOT the intended default, but silently
+    became the actual production behavior anyway because _CFG["use_mappy"]
+    used to default to None ("auto-detect and prefer if importable") with
+    no CLI flag to override it -- and the production server happened to
+    have mappy installed. Every fix validated on this project across many
+    sessions (mismatch-rate control, internal-anchor/collective-rescue
+    fallbacks, chimeric-merge safety, minimizer-dedup bug fix, endpoint/
+    reverse k-mer indices, the infinite-extension progress guard) only
+    applies to assemble_umi and was a complete no-op for any run that took
+    this path -- confirmed via a real 1.5M-UMI run where numerous barcodes
+    matched a known PRE-fix baseline almost exactly.
+
+    Known gaps relative to assemble_umi, not yet closed:
+    - No mismatch-rate check on accepted overlaps -- relies entirely on
+      minimap2's own ava-sr scoring/heuristics.
+    - Always collapses to exactly ONE contig per barcode: the greedy merge
+      loop below has no equivalent of assemble_umi's multiple raw-attempt
+      loop, so a barcode carrying reads from more than one physical
+      fragment (a known stLFR/cLFR reality -- barcode reuse/collision) has
+      no chance of being split into separate, correct contigs -- it is
+      prone to producing a single chimeric merge instead.
+    - No single-read UMI support (returns None below len(seqs) < 2),
+      the exact low-depth case assemble_umi was originally built for.
+    - No internal-anchor fallback, no collective/cross-attempt rescue for
+      redundant low-overlap noisy reads, no post-assembly polish step.
+
+    use_mappy therefore defaults to False everywhere (configure()/_CFG/CLI
+    --mappy is opt-in). Do not re-enable by default without giving this
+    path the same validation assemble_umi has been through.
     """
     try:
         import mappy as mp
@@ -1721,6 +1762,15 @@ def _build_arg_parser():
                     help="restrict collective rescue to the current attempt's own "
                          "leftover reads only, disabling cross-attempt evidence "
                          "sharing (on by default; see assemble_umi docstring)")
+    ap.add_argument("--mappy", action="store_true",
+                    help="try mappy/minimap2 (ava-sr) overlap detection before "
+                         "assemble_umi -- OFF by default: a real 1.5M production run "
+                         "was confirmed to silently take this path whenever `mappy` "
+                         "happened to be importable, bypassing every correctness fix "
+                         "this project has made (no mismatch-rate check, no chimeric-"
+                         "merge safety, always one contig per barcode, no single-read "
+                         "UMI support). Opt-in only, for experimentation; see "
+                         "_assemble_umi_mappy's docstring")
     return ap
 
 
@@ -1729,12 +1779,19 @@ def _configure_from_args(args):
     Maps parsed CLI args to configure() kwargs -- pulled out of _main_cli so
     tests can verify the actual end-to-end default (e.g. "no flags passed")
     without running the whole read-streaming pipeline. This mapping is the
-    exact spot a real bug lived in before: --no_minimizer_dedup (an opt-OUT
-    flag) meant "flag absent" silently forced use_minimizer_dedup=True via
-    `not args.no_minimizer_dedup`, re-enabling a feature confirmed to corrupt
-    real 16S assemblies, even though assemble_umi/configure/_CFG's own
-    defaults all say False. Fixed by making minimizer dedup an explicit
-    opt-IN flag (--minimizer_dedup, default False) instead.
+    exact spot two real bugs lived in before:
+    - --no_minimizer_dedup (an opt-OUT flag) meant "flag absent" silently
+      forced use_minimizer_dedup=True via `not args.no_minimizer_dedup`,
+      re-enabling a feature confirmed to corrupt real 16S assemblies, even
+      though assemble_umi/configure/_CFG's own defaults all say False.
+      Fixed by making it an explicit opt-IN flag (--minimizer_dedup,
+      default False) instead.
+    - use_mappy had no CLI flag at all and defaulted to None ("auto-detect
+      and prefer if importable"). A real 1.5M production run silently took
+      the mappy path the whole time because the server happened to have it
+      installed, making every assemble_umi fix validated on this project a
+      no-op in production. Fixed the same way: explicit opt-IN flag
+      (--mappy, default False).
     """
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
               max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
@@ -1743,7 +1800,37 @@ def _configure_from_args(args):
               internal_min_verify=args.internal_min_verify,
               max_contigs=args.max_contigs,
               use_minimizer_dedup=args.minimizer_dedup,
-              use_cross_attempt_evidence=not args.no_cross_attempt_evidence)
+              use_cross_attempt_evidence=not args.no_cross_attempt_evidence,
+              use_mappy=args.mappy)
+
+
+def _git_version_string():
+    """
+    Identify exactly which commit/working-tree state of this script produced
+    a given run's output. Motivated by a real production incident: a full
+    1.5M-UMI run reported yield stats identical to a known pre-fix baseline,
+    and resolving whether it actually used the latest code took several
+    rounds of manually checking `git log`/timestamps after the fact. Runs
+    now self-report this instead of relying on out-of-band reconstruction.
+    Never raises -- a missing git binary or a non-repo checkout must not
+    block an actual production run over a diagnostics nicety.
+    """
+    import subprocess
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", script_dir, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL).decode().strip()
+        branch = subprocess.check_output(
+            ["git", "-C", script_dir, "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL).decode().strip()
+        dirty = subprocess.call(
+            ["git", "-C", script_dir, "diff", "--quiet", "HEAD", "--",
+             os.path.abspath(__file__)],
+            stderr=subprocess.DEVNULL) != 0
+        return "commit={} branch={} local_edits_to_this_file={}".format(commit, branch, dirty)
+    except Exception as exc:
+        return "unknown (git unavailable or not a checkout: {})".format(exc)
 
 
 def _main_cli():
@@ -1755,6 +1842,12 @@ def _main_cli():
 
     if not os.path.isdir("denovo"):
         os.makedirs("denovo")
+
+    version_line = "run_start={} denovo_seed_olc.py {}".format(
+        datetime.datetime.now(), _git_version_string())
+    print(version_line, flush=True)
+    with open(os.path.join("denovo", "version.txt"), "a") as vf:
+        vf.write(version_line + "\n")
 
     print("start={}".format(datetime.datetime.now()), flush=True)
     if args.n is not None:
