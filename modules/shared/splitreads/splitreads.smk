@@ -310,6 +310,18 @@ rule split_reads:
             shell("touch split_stat_read1.log && cd data && ln -s read_1.fq.gz split_read.1.fq.gz && ln -s read_2.fq.gz split_read.2.fq.gz && cd ..")
 
 rule trim_reads:
+    # qtrim=rl only trims by base quality -- it does not detect or remove
+    # adapter read-through. Confirmed via real 16S/DNBSEQ data: reads whose
+    # insert is shorter than the read length carry the MGI dual-barcode
+    # adapter (Forward/Reverse filter, from MGI's official "DNBSEQ Dual
+    # Barcode Adapter & Barcode Sequences" doc) followed by a 10bp index and
+    # the read's own barcode -- fully intact even after this rule's existing
+    # quality-only trim. adapter_ref (config['params'], optional) adds
+    # bbduk's own k-mer adapter trim (ktrim=r: once a k-mer match is found,
+    # everything from that point to the read's right end is discarded,
+    # regardless of what it is -- no need to separately match the variable
+    # index/barcode that follows). hdist=1 tolerates the occasional
+    # single-base sequencing error inside the adapter itself.
     input:
         f1="data/split_read.1.fq.gz",
         f2="data/split_read.2.fq.gz"
@@ -318,13 +330,18 @@ rule trim_reads:
         t2= "data/split_read_2_trimmed.fastq.gz"
     params:
         bbduk = config['params']['bbduk'],
-        sequence_type= config['params']['sequence_type'].lower()
+        sequence_type= config['params']['sequence_type'].lower(),
+        adapter_ref = config['params'].get('adapter_ref', '')
     shell:
         """
+        ADAPTER_ARGS=""
+        if [[ -n "{params.adapter_ref}" ]]; then
+            ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k=23 hdist=1"
+        fi
         if [[ "{params.sequence_type}" == "pe" ]]; then
-            {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl 
+            {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl $ADAPTER_ARGS
         elif [[ "{params.sequence_type}" == "se" ]]; then
-            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl && touch data/split_read_1_trimmed.fastq.gz
+            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;
