@@ -149,6 +149,7 @@ rule run_denovo_parallel:
         assembler = config['frag_de_novo'].get('assembler', 'megahit'),
         n_umi = config['frag_de_novo'].get('assembly_N_umi'),
         run_parallel = config['frag_de_novo'].get('run_parallel', False),
+        max_contigs = config['frag_de_novo'].get('max_contigs', 8),
         src_dir = config['params']['src_dir']
     run:
         if not params.run_parallel:
@@ -168,6 +169,7 @@ rule run_denovo_parallel:
                        "--n_line_chunk 2000000 ",
                        "--start_idx {params.start_idx} ",
                        "--min_ctg_len {params.min_ctg_len} ",
+                       "--max_contigs {params.max_contigs} ",
                        "--nth_of_nodes 0"]
             if params.n_umi not in (None, "", "all"):
                 command.append("--n {params.n_umi} ")
