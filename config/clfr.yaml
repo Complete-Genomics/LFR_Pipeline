@@ -113,6 +113,13 @@ params:
     bbduk: "/path/to/bbduk.sh"
     bgzip: "/path/to/bgzip"
 
+    # adapter read-through reference for trim_reads' bbduk ktrim step (optional --
+    # leave unset/empty to keep quality-only trimming). Confirmed on real 16S/
+    # DNBSEQ data: reads shorter than the read length carry the MGI dual-barcode
+    # adapter (Forward/Reverse filter) followed by a 10bp index + the read's own
+    # barcode, untouched by qtrim=rl alone. See config/adapters/mgi_dnbseq_adapters.fa
+    adapter_ref: "config/adapters/mgi_dnbseq_adapters.fa"
+
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
     # featurecounts: "/path/to/featureCounts"
     ercc_gtf: "/path/to/ERCC92.gtf"
