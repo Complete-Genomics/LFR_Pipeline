@@ -150,4 +150,9 @@ include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 include: src_dir+"modules/clfr/consensus_fasta/consensus_fasta.smk"
 # include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
 # include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
-include: src_dir+"modules/clfr/denovo/denovo_clfr.smk"
+include: src_dir+"modules/clfr/denovo/denovo_preprocess.smk"
+assembler=config['frag_de_novo'].get('assembler', 'megahit')
+if assembler == 'megahit':
+    include: src_dir+"modules/clfr/denovo/denovo_clfr.smk"
+elif assembler == 'olc':
+    include: src_dir+"modules/clfr/denovo/denovo_olc.smk"

@@ -15,7 +15,7 @@ TODO:
 3/ multiple assembly
 
 '''
-import os, io
+import os
 import subprocess
 import multiprocessing as mp
 from multiprocessing import Pool
@@ -44,6 +44,12 @@ parser.add_argument("--nth_of_nodes", type=int, required=False)
 parser.add_argument('--debug', action='store_true', default=False, help='Enable debug mode')
 parser.add_argument("--megahit", type=str, default='megahit', help='Path to megahit binary')
 parser.add_argument("--tmp_dir", type=str, default="/dev/shm", help="Root directory for megahit temporary outputs")
+parser.add_argument("--megahit_memory", type=float, default=None,
+                    help="MEGAHIT -m value; omit to retain MEGAHIT's default")
+parser.add_argument("--megahit_threads", type=int, default=2,
+                    help="threads per MEGAHIT process [2]")
+parser.add_argument("--megahit_no_hw_accel", action="store_true",
+                    help="pass --no-hw-accel to MEGAHIT")
 # parser.add_argument("--rg", type=str, default='rg', help='Path to rg (ripgrep) binary')
 
 
@@ -63,7 +69,19 @@ end_idx = args.end_idx
 ID = args.nth_of_nodes
 MEGAHIT = args.megahit
 TMP_DIR = Path(args.tmp_dir)
+MEGAHIT_MEMORY = args.megahit_memory
+MEGAHIT_THREADS = args.megahit_threads
+MEGAHIT_NO_HW_ACCEL = args.megahit_no_hw_accel
 # RG = args.rg
+
+# Pool workers created with macOS/Windows ``spawn`` import this module instead
+# of running its __main__ block below.  tmp_root() is reached before MEGAHIT is
+# launched, so BATCH_LANE must exist at import time as well as in the parent.
+_cwd_parts = Path.cwd().parts
+BATCH_LANE = "{}_{}".format(_cwd_parts[-3], _cwd_parts[-2])
+# See BATCH_LANE above: spawned workers do not execute the parent-only
+# __main__ initialization, but cleanup_path() is called in every worker.
+DEBUG = False
 
 class NullLock:
     def __enter__(self):
@@ -118,21 +136,18 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     # rg = RG
 
     try:
-        # Create in-memory files for R1 and R2 using io.BytesIO
-        # r1_fasta = io.BytesIO()
-        r2_fasta = io.BytesIO()
-        # r1_fasta.writelines(f"{line}\n".encode() for line in shared_meta_data1.get(barcode))
-        r2_fasta.writelines(f"{line}\n".encode() for line in shared_meta_data2.get(barcode))
-        # r1_fasta.seek(0)
-        r2_fasta.seek(0)
+        # Do not pass reads through /dev/stdin.  Under multiprocessing spawn
+        # (macOS/Windows), a worker's /dev/stdin is not reliably the pipe
+        # supplied to Popen, so MEGAHIT can read no input at all.  The per-UMI
+        # output directory already exists for MEGAHIT; use a short-lived FASTA
+        # there and let cleanup_path() remove it with the rest of the run.
+        barcode_dir = barcode_tmp_dir(barcode)
+        barcode_dir.mkdir(parents=True, exist_ok=True)
+        r2_path = barcode_dir / "reads_R2.fa"
+        with open(r2_path, "w") as r2_fasta:
+            r2_fasta.write("\n".join(shared_meta_data2.get(barcode)) + "\n")
         
-        num_cpu = 2  # at least 2 -- kept as-is; megahit's own source has no
-                      # hard minimum (defaults to 0 = autodetect all CPUs,
-                      # accepts -t 1 with no validation error), but that's
-                      # from reading the git master source, not from testing
-                      # the actual installed build/version on this cluster.
-                      # Not worth the production risk to drop this to 1
-                      # without verifying on the real megahit binary first.
+        num_cpu = MEGAHIT_THREADS
         # Command for megahit (list form, no shell=True: skips one extra
         # /bin/sh fork+exec per barcode). shlex.split(megahit) instead of
         # just [megahit, ...]: megahit is normally a single binary path,
@@ -140,22 +155,19 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
         # ("python3 /path/to/script.py"), shell=True used to word-split it
         # for free -- shlex.split keeps that working under shell=False.
         megahit_command = shlex.split(megahit) + [
-            "-r", "/dev/stdin", "-t", str(num_cpu),
-            "-o", str(barcode_tmp_dir(barcode)), "--out-prefix", barcode,
+            "-r", str(r2_path), "-t", str(num_cpu),
+            "-o", str(barcode_dir), "--out-prefix", barcode,
             "--k-min", str(K_MIN), "--k-max", str(K_MAX), "--force",
             "--min-contig-len=%d" % MIN_CTG_LEN,
         ]
+        if MEGAHIT_MEMORY is not None:
+            megahit_command += ["-m", str(MEGAHIT_MEMORY)]
+        if MEGAHIT_NO_HW_ACCEL:
+            megahit_command.append("--no-hw-accel")
 
-        # Run megahit using pipes
-        process = subprocess.Popen(
-            megahit_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, stderr = process.communicate(input=r2_fasta.read())
-
-        append_contigs_and_cleanup(barcode, process.returncode, stderr, lock)
+        process = subprocess.run(megahit_command, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        append_contigs_and_cleanup(barcode, process.returncode, process.stderr, lock)
 
     except Exception as e: print(e)
     return
@@ -168,42 +180,33 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     megahit = MEGAHIT
 
     try:
-        # Create in-memory files for R1 and R2 using io.BytesIO
-        r1_fasta = io.BytesIO()
-        r2_fasta = io.BytesIO()
-        r1_fasta.writelines(f"{line}\n".encode() for line in shared_meta_data1.get(barcode))
-        r2_fasta.writelines(f"{line}\n".encode() for line in shared_meta_data2.get(barcode))
-        r1_fasta.seek(0)
-        r2_fasta.seek(0)
+        barcode_dir = barcode_tmp_dir(barcode)
+        barcode_dir.mkdir(parents=True, exist_ok=True)
+        r1_path = barcode_dir / "reads_R1.fa"
+        r2_path = barcode_dir / "reads_R2.fa"
+        with open(r1_path, "w") as r1_fasta:
+            r1_fasta.write("\n".join(shared_meta_data1.get(barcode)) + "\n")
+        with open(r2_path, "w") as r2_fasta:
+            r2_fasta.write("\n".join(shared_meta_data2.get(barcode)) + "\n")
         
-        num_cpu = 2  # at least 2 -- see process_barcode_se for why this is
-                      # kept unchanged rather than dropped to 1
+        num_cpu = MEGAHIT_THREADS
         # Command for megahit (list form, no shell=True: skips one extra
         # /bin/sh fork+exec per barcode). shlex.split(megahit): see
         # process_barcode_se for why.
         megahit_command = shlex.split(megahit) + [
-            "-1", "/dev/stdin", "-2", "/dev/stdin", "-t", str(num_cpu),
-            "-o", str(barcode_tmp_dir(barcode)), "--out-prefix", barcode,
+            "-1", str(r1_path), "-2", str(r2_path), "-t", str(num_cpu),
+            "-o", str(barcode_dir), "--out-prefix", barcode,
             "--k-min", str(K_MIN), "--k-max", str(K_MAX), "--force",
             "--min-contig-len=%d" % MIN_CTG_LEN,
         ]
+        if MEGAHIT_MEMORY is not None:
+            megahit_command += ["-m", str(MEGAHIT_MEMORY)]
+        if MEGAHIT_NO_HW_ACCEL:
+            megahit_command.append("--no-hw-accel")
 
-        # Run megahit using pipes
-        process = subprocess.Popen(
-            megahit_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        stdout, stderr = process.communicate(input=r1_fasta.read() + r2_fasta.read())
-        # Check if the megahit command executed successfully
-        # if process.returncode != 0:
-        #     print(f"Megahit failed: {stderr.decode()}")
-        #     return
-        # else:
-        #     print(f"Megahit success: {stdout.decode()}")
-
-        append_contigs_and_cleanup(barcode, process.returncode, stderr, lock)
+        process = subprocess.run(megahit_command, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        append_contigs_and_cleanup(barcode, process.returncode, process.stderr, lock)
 
     except Exception as e: print(e)
     return

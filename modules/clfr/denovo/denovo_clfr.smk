@@ -7,122 +7,9 @@ megahit = config['params']['megahit']
 bbduk = config['params']['bbduk']
 bgzip = config['params']['bgzip']
 
-def count_lines():
-    ## count filtered_barcode_freq.txt to determine starts of fq header line in filter_reads1 function
-    file_path = "denovo/filtered_barcode_freq.txt"
-    with open(file_path, 'r') as f:
-        line_count = sum(1 for _ in f)
-    return (((line_count%4)+1)%4)
-
-rule select_denovo_barcodes:
-    input:
-        "split_stat_read1.log"
-    output:
-        "denovo/filtered_barcode_freq.txt"
-    params:
-        reads_per_BC = config['frag_de_novo']['reads_per_BC']
-    shell:
-        """
-        mkdir -p denovo
-        awk -F '\\t' -v cutoff={params.reads_per_BC} \
-            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff {{print "BX:Z:" $3}}' \
-            {input} > {output}
-        """
-
-rule filter_reads1:
-    input:
-        barcode_freq="denovo/filtered_barcode_freq.txt",
-        read="data/split_read_1_trimmed.fastq.gz"
-    output:
-        "denovo/data_R1_filtered.fastq.gz"
-    params:
-        bgzip = bgzip,
-    run:
-        if config['params']['sequence_type'].lower()=='pe':
-            params.nth_line = count_lines()
-            shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(zcat {input.read}) | {params.bgzip} -c > {output} ")
-        elif config['params']['sequence_type'].lower()=='se':
-            shell("touch denovo/data_R1_filtered.fastq.gz")
-
-
-rule filter_reads2:
-    input:
-        barcode_freq="denovo/filtered_barcode_freq.txt",
-        read="data/split_read_2_trimmed.fastq.gz"
-    output:
-        "denovo/data_R2_filtered.fastq.gz"
-    params:
-        bgzip = bgzip,
-    run:
-        params.nth_line = count_lines()
-        shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(zcat {input.read}) | {params.bgzip} -c > {output} ")
-
-
-
-# rule trim_reads:
-#     input:
-#         f1="denovo/data_R1_filtered.fastq.gz",
-#         f2="denovo/data_R2_filtered.fastq.gz"
-#     output:
-#         t1= "denovo/data_R1_filtered_trimmed.fastq.gz",
-#         t2= "denovo/data_R2_filtered_trimmed.fastq.gz"
-#     params:
-#         bbduk = bbduk,
-#         sequence_type= config['params']['sequence_type'].lower()
-#     shell:
-#         """
-#         if [[ "{params.sequence_type}" == "pe" ]]; then
-#             {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl 
-#         elif [[ "{params.sequence_type}" == "se" ]]; then
-#             {params.bbduk} in={input.f2} out={output.t2} qtrim=rl && touch denovo/data_R1_filtered_trimmed.fastq.gz
-#         else
-#             echo "Unknown type {params.sequence_type}" >&2;
-#             exit 1;
-#         fi
-#         """
-
-
-rule reformat_fasta1:
-    input:
-        "denovo/data_R1_filtered.fastq.gz"
-    output:
-        "denovo/data_R1_sgrep.tsv"
-    params:
-        sequence_type = config['params']['sequence_type'].lower(),
-        sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
-        sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')
-    shell:
-        """
-        mkdir -p {params.sort_tmp_dir}
-        if [[ "{params.sequence_type}" == "pe" ]]; then
-            zcat {input} | \
-            awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
-            awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
-            LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
-        elif [[ "{params.sequence_type}" == "se" ]]; then
-            touch denovo/data_R1_sgrep.tsv
-        else
-            echo "Unknown type {params.sequence_type}" >&2;
-            exit 1;
-        fi
-        """
-
-rule reformat_fasta2:
-    input:
-        "denovo/data_R2_filtered.fastq.gz"
-    output:
-        "denovo/data_R2_sgrep.tsv"
-    params:
-        sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
-        sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')
-    shell:
-        """
-        mkdir -p {params.sort_tmp_dir}
-        zcat {input} | \
-        awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
-        awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
-        LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
-        """
+# Preprocessing (barcode selection -> read filtering -> sgrep TSV reformat) now
+# lives in denovo_preprocess.smk, included unconditionally by workflows/clfr.smk
+# so both the megahit and seedext/OLC assembler branches share it.
 
 def count_fq_len():
     file_path = f'denovo/data_R2_sgrep.tsv'
@@ -146,10 +33,7 @@ rule run_denovo_parallel:
         k_max = 41,
         megahit = config['params']['megahit'],
         tmp_dir = config['frag_de_novo'].get('tmp_dir', '/dev/shm'),
-        assembler = config['frag_de_novo'].get('assembler', 'megahit'),
-        n_umi = config['frag_de_novo'].get('assembly_N_umi'),
         run_parallel = config['frag_de_novo'].get('run_parallel', False),
-        max_contigs = config['frag_de_novo'].get('max_contigs', 8),
         src_dir = config['params']['src_dir']
     run:
         if not params.run_parallel:
@@ -160,31 +44,17 @@ rule run_denovo_parallel:
         params.end_idx = config['frag_de_novo'].get('end_idx')
         params.start_idx = config['frag_de_novo'].get('start_idx', 0)
 
-        if params.assembler == 'seedext':
-            # pure-Python OLC assembler, no megahit / no subprocess fork per UMI
-            command = ["{params.python}",
-                       "{params.src_dir}/modules/clfr/denovo/denovo_seed_olc.py",
-                       "--num_processes {params.num_processes} ",
-                       "--sequence_type {params.sequence_type} ",
-                       "--n_line_chunk 2000000 ",
-                       "--start_idx {params.start_idx} ",
-                       "--min_ctg_len {params.min_ctg_len} ",
-                       "--max_contigs {params.max_contigs} ",
-                       "--nth_of_nodes 0"]
-            if params.n_umi not in (None, "", "all"):
-                command.append("--n {params.n_umi} ")
-        else:
-            command = ["{params.python}",
-                       "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
-                       "--num_processes {params.num_processes} ",
-                       "--sequence_type {params.sequence_type} ",
-                       "--n_line_chunk 2000000 ",
-                       "--start_idx {params.start_idx} ",
-                       "--module denovo_parallel ",
-                       "--min_ctg_len {params.min_ctg_len} ",
-                       "--megahit {params.megahit} ",
-                       "--tmp_dir {params.tmp_dir} ",
-                       "--nth_of_nodes 0"]
+        command = ["{params.python}",
+                   "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
+                   "--num_processes {params.num_processes} ",
+                   "--sequence_type {params.sequence_type} ",
+                   "--n_line_chunk 2000000 ",
+                   "--start_idx {params.start_idx} ",
+                   "--module denovo_parallel ",
+                   "--min_ctg_len {params.min_ctg_len} ",
+                   "--megahit {params.megahit} ",
+                   "--tmp_dir {params.tmp_dir} ",
+                   "--nth_of_nodes 0"]
 
         if params.end_idx not in (None, "", "all"):
             command.append("--end_idx {params.end_idx} ")
