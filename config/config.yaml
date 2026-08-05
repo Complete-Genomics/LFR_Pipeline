@@ -186,6 +186,7 @@ benchmark:
     benchmark_indel: "/path/to/hg38_GIAB_HG001/benchmark_indel.chrfix.vcf.gz"
     bedfile: "/path/to/hg38_GIAB_HG001/benchmark_bed.chrfix.bed"
     ref_sdf: "/path/to/hg38_benchmark_ref/GRCh38.sdf"
+    # /mnt/qnap-archive/ycai/src/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38_GIAB_HG002
     truth_vcf_dir: ""
     vcf_benchmark: ""
 
