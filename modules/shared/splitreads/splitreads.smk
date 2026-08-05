@@ -316,7 +316,8 @@ rule trim_reads:
     # adapter (Forward/Reverse filter, from MGI's official "DNBSEQ Dual
     # Barcode Adapter & Barcode Sequences" doc) followed by a 10bp index and
     # the read's own barcode -- fully intact even after this rule's existing
-    # quality-only trim. adapter_ref (config['params'], optional) adds
+    # quality-only trim. bootstrap.smk sets adapter_ref to the packaged MGI
+    # adapter file; a config value can override it.
     # bbduk's own k-mer adapter trim (ktrim=r: once a k-mer match is found,
     # everything from that point to the read's right end is discarded,
     # regardless of what it is -- no need to separately match the variable

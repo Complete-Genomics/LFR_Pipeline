@@ -24,6 +24,11 @@ config.setdefault("params", {})
 if _is_placeholder(config["params"].get("src_dir")):
     config["params"]["src_dir"] = str(PIPELINE_ROOT) + "/"
 
+_set_default_param(
+    "adapter_ref",
+    str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "mgi_dnbseq_adapters.fa"),
+)
+
 for _name, _default in {
     "gatk_install": "gatk",
     "calc_frag_python": "python",
