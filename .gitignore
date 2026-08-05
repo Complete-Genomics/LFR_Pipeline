@@ -8,3 +8,4 @@ data/
 config/
 resources/
 modules/clfr/denovo/data_R2_sgrap.tsv
+modules/clfr/denovo/compare_seedext_to_megahit.py

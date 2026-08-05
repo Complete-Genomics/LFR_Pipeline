@@ -118,6 +118,7 @@ params:
     megahit: "/path/to/megahit"
     bbduk: "/path/to/bbduk.sh"
     bgzip: "/path/to/bgzip"
+    adapter_ref: "config/adapters/mgi_dnbseq_adapters.fa"
 
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
     featurecounts: "/path/to/featureCounts"
