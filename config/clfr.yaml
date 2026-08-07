@@ -112,6 +112,10 @@ params:
     megahit: "/path/to/megahit"
     bbduk: "/path/to/bbduk.sh"
     bgzip: "/path/to/bgzip"
+    # reference-free chimera detection for OLC post-assembly QC (no curated
+    # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
+    # chimeraQC_olc/combineQC_olc and denovo.md sec 26/29)
+    vsearch: "/path/to/vsearch"
 
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
     # featurecounts: "/path/to/featureCounts"
@@ -167,6 +171,19 @@ frag_de_novo:
     min_ctg_len: 400
     num_processes: 30
     assembler: olc   # megahit | seedext (pure-Python OLC, no subprocess fork)
+    # OLC QC strength. Default `auto` lets the pipeline measure the sample's
+    # own diversity (20s probe) and pick for you -- no need to declare the
+    # sample type. The decision is recorded in denovo/qc_decision.tsv.
+    # Pin an explicit preset instead when a batch of samples must be directly
+    # comparable. Measured on the ZymoBIOMICS control (denovo.md sec 33/35):
+    #   none       keeps 100%  of fragments, mean identity 94.2 -- raw output
+    #   high_div   soil/sediment and other high-diversity samples: filters
+    #              reads but keeps post-QC lenient, so breadth is protected
+    #              (QC costs ~15% of bases there vs ~4% on a mock). Alias: soil
+    #   sensitive  keeps  92%,  mean 95.5 -- rare taxa matter most
+    #   balanced   keeps  84%,  mean 95.8 -- default, general profiling
+    #   strict     keeps  23%,  mean 97.1 -- depositing sequences / phylogenetics
+    qc_preset: auto
     assembly_N_umi:      # empty = denovo all UMIs; set an int to cap for debug/smoke test
 
 umi:

@@ -118,7 +118,10 @@ params:
     megahit: "/path/to/megahit"
     bbduk: "/path/to/bbduk.sh"
     bgzip: "/path/to/bgzip"
-
+    # reference-free chimera detection for OLC post-assembly QC (no curated
+    # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
+    # chimeraQC_olc/combineQC_olc and denovo.md sec 26/29)
+    vsearch: "/path/to/vsearch"
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
     featurecounts: "/path/to/featureCounts"
     ercc_gtf: "/path/to/ERCC92.gtf"
