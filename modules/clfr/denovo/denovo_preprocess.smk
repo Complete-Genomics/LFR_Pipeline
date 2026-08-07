@@ -1,6 +1,6 @@
 
 # Assembler-agnostic preprocessing: barcode selection -> read filtering ->
-# sgrep TSV reformat. Shared by both denovo_clfr.smk (megahit) and
+# sorted TSV reformat. Shared by both denovo_clfr.smk (megahit) and
 # denovo_olc.smk (seedext/OLC), which branch on config['frag_de_novo']['assembler']
 # only from run_denovo_parallel onward -- included unconditionally so neither
 # assembler-specific module needs its own copy of this chain.
@@ -60,7 +60,7 @@ rule reformat_fasta1:
     input:
         "denovo/data_R1_filtered.fastq.gz"
     output:
-        "denovo/data_R1_sgrep.tsv"
+        "denovo/data_R1_sorted.tsv"
     params:
         sequence_type = config['params']['sequence_type'].lower(),
         sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
@@ -74,7 +74,7 @@ rule reformat_fasta1:
             awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
             LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
         elif [[ "{params.sequence_type}" == "se" ]]; then
-            touch denovo/data_R1_sgrep.tsv
+            touch denovo/data_R1_sorted.tsv
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;
@@ -85,7 +85,7 @@ rule reformat_fasta2:
     input:
         "denovo/data_R2_filtered.fastq.gz"
     output:
-        "denovo/data_R2_sgrep.tsv"
+        "denovo/data_R2_sorted.tsv"
     params:
         sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
         sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')

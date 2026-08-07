@@ -7,12 +7,12 @@ megahit = config['params']['megahit']
 bbduk = config['params']['bbduk']
 bgzip = config['params']['bgzip']
 
-# Preprocessing (barcode selection -> read filtering -> sgrep TSV reformat) now
+# Preprocessing (barcode selection -> read filtering -> sorted TSV reformat) now
 # lives in denovo_preprocess.smk, included unconditionally by workflows/clfr.smk
 # so both the megahit and seedext/OLC assembler branches share it.
 
 def count_fq_len():
-    file_path = f'denovo/data_R2_sgrep.tsv'
+    file_path = f'denovo/data_R2_sorted.tsv'
     with open(file_path, 'r') as f:
         total_lines = sum(1 for line in f)
     return total_lines
@@ -20,8 +20,8 @@ def count_fq_len():
 
 rule run_denovo_parallel:
     input:
-        "denovo/data_R1_sgrep.tsv",
-        "denovo/data_R2_sgrep.tsv"
+        "denovo/data_R1_sorted.tsv",
+        "denovo/data_R2_sorted.tsv"
     output:
         "denovo/frag_denovo_done"
     params:

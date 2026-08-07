@@ -24,8 +24,8 @@ Self-test (no args)
 
 Standalone CLI (drop-in replacement for denovo_clfr_ram.py --module denovo_parallel)
 -------------------------------------------------------------------------------------
-Run directly from a Snakemake work dir containing denovo/data_R1_sgrep.tsv
-and denovo/data_R2_sgrep.tsv (same layout denovo_clfr_ram.py expects).
+Run directly from a Snakemake work dir containing denovo/data_R1_sorted.tsv
+and denovo/data_R2_sorted.tsv (same layout denovo_clfr_ram.py expects).
 No megahit binary, no tmp_dir, no subprocess fork per UMI.
 
     python3 denovo_seed_olc.py \\
@@ -47,7 +47,7 @@ Benchmark only, no pipeline side effects (run from Snakemake work dir)
 ------------------------------------------------------------------------
     python3 /path/to/benchmark_seedext.py \\
         --n 1000 \\
-        --r2 denovo/data_R2_sgrep.tsv \\
+        --r2 denovo/data_R2_sorted.tsv \\
         --min_ctg 400
 
 Output printed:
@@ -1751,8 +1751,8 @@ def _build_arg_parser():
     ap.add_argument("--min_overlap", type=int, default=20)
     ap.add_argument("--max_mismatch", type=float, default=0.05)
     ap.add_argument("--nth_of_nodes", type=int, default=0)
-    ap.add_argument("--r1", type=str, default="denovo/data_R1_sgrep.tsv")
-    ap.add_argument("--r2", type=str, default="denovo/data_R2_sgrep.tsv")
+    ap.add_argument("--r1", type=str, default="denovo/data_R1_sorted.tsv")
+    ap.add_argument("--r2", type=str, default="denovo/data_R2_sorted.tsv")
     ap.add_argument("--n", type=int, default=None,
                     help="only assemble the first N UMIs total, across all chunks "
                          "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")

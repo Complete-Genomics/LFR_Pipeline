@@ -1,10 +1,10 @@
 """
 Benchmark + smoke-test denovo_seed_olc.assemble_umi on real data.
 
-Usage (run from the Snakemake work dir that contains denovo/data_R2_sgrep.tsv):
+Usage (run from the Snakemake work dir that contains denovo/data_R2_sorted.tsv):
 
     # timing only, single core
-    python3 /path/to/benchmark_seedext.py --n 1000 --r2 denovo/data_R2_sgrep.tsv
+    python3 /path/to/benchmark_seedext.py --n 1000 --r2 denovo/data_R2_sorted.tsv
 
     # timing with N worker processes -- single-core numbers alone don't
     # tell you real production throughput; the deployed path always runs
@@ -14,11 +14,11 @@ Usage (run from the Snakemake work dir that contains denovo/data_R2_sgrep.tsv):
     # e.g. on one dev machine 12 processes was slower than 8, from
     # oversubscription). Try a few values and look for where it stops
     # helping, don't just take the highest core count.
-    python3 /path/to/benchmark_seedext.py --n 1000 --r2 denovo/data_R2_sgrep.tsv \\
+    python3 /path/to/benchmark_seedext.py --n 1000 --r2 denovo/data_R2_sorted.tsv \\
         --num_processes 30
 
     # smoke test: write FASTA and inspect
-    python3 /path/to/benchmark_seedext.py --n 100 --r2 denovo/data_R2_sgrep.tsv \\
+    python3 /path/to/benchmark_seedext.py --n 100 --r2 denovo/data_R2_sorted.tsv \\
         --output smoke_contigs.fa
     grep -c '>' smoke_contigs.fa          # count contigs
     awk '/^>/{next}{print length}' smoke_contigs.fa | sort -n  # contig lengths
@@ -54,8 +54,8 @@ def _assemble_one(seqs, min_ov, min_ctg):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n",  type=int, default=1000, help="number of UMIs to benchmark [1000]")
-    parser.add_argument("--r2", type=str, default="denovo/data_R2_sgrep.tsv",
-                        help="path to sgrep TSV (R2) [denovo/data_R2_sgrep.tsv]")
+    parser.add_argument("--r2", type=str, default="denovo/data_R2_sorted.tsv",
+                        help="path to sorted TSV (R2) [denovo/data_R2_sorted.tsv]")
     parser.add_argument("--min_ctg", type=int, default=400)
     parser.add_argument("--min_ov",  type=int, default=20)
     parser.add_argument("--num_processes", type=int, default=1,

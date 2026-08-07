@@ -9,8 +9,8 @@ MRNA_MAPPER = config['params']['mrna_mapper'].lower()
 
 rule run_denovoOLC_parallel:
     input:
-        "denovo/data_R1_sgrep.tsv",
-        "denovo/data_R2_sgrep.tsv"
+        "denovo/data_R1_sorted.tsv",
+        "denovo/data_R2_sorted.tsv"
     output:
         "denovo/frag_denovo_done"
     params:
