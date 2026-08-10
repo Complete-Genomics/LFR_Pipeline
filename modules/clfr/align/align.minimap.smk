@@ -30,9 +30,7 @@ rule map_reads_minimap:
         """
         # ============ 1. set env ============
         #log=Align/minimap2.log
-        #tmp_prefix=/dev/shm/minimap_tmp
-        
-        SORT_TMP=/dev/shm/minimap_tmp_$$
+        SORT_TMP=Align/tmp/minimap_tmp_$$
         echo "minimap2 samtools sort tmp: $SORT_TMP" >&2
         mkdir -p $SORT_TMP
 
@@ -58,5 +56,4 @@ rule map_reads_minimap:
         rm -rf $SORT_TMP
 
         """
-
 
