@@ -129,6 +129,8 @@ _CFG = {
     "out_id":    0,
     "out_file":  "denovo/final_contigs_{id}.fa",
     "seed_k":    10,    # k-mer size for overlap pre-filter
+    "adaptive_seed_k": False,  # retry a strict seed_k with fallback_seed_k only if no valid contig
+    "fallback_seed_k": 10,
     "use_mappy": False,  # OFF by default: _assemble_umi_mappy has none of assemble_umi's
                          # correctness hardening (no mismatch-rate check, no chimeric-merge
                          # safety, always collapses a barcode to a single contig with no
@@ -157,11 +159,13 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
               polish=True, polish_min_coverage=3, polish_vote_concordance=0.6,
               polish_kmer_step=5, use_internal_anchor=True, internal_min_verify=60,
               max_contigs=8, use_minimizer_dedup=False,
-              use_cross_attempt_evidence=True):
+              use_cross_attempt_evidence=True, adaptive_seed_k=False,
+              fallback_seed_k=10, seed_k=10):
     """Call once in the parent process before spawning Pool workers."""
     _CFG["min_ctg"]   = min_ctg_len
     _CFG["min_ov"]    = min_overlap
     _CFG["max_mm"]    = max_mismatch
+    _CFG["seed_k"]    = seed_k
     _CFG["out_id"]    = out_id
     _CFG["out_file"]  = out_file
     _CFG["use_mappy"] = use_mappy
@@ -174,6 +178,8 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
     _CFG["max_contigs"]              = max_contigs
     _CFG["use_minimizer_dedup"]      = use_minimizer_dedup
     _CFG["use_cross_attempt_evidence"] = use_cross_attempt_evidence
+    _CFG["adaptive_seed_k"] = adaptive_seed_k
+    _CFG["fallback_seed_k"] = fallback_seed_k
 
 
 # ── sequence utilities ────────────────────────────────────────────────────────
@@ -1068,10 +1074,10 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
     return contig, used
 
 
-def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
-                 use_internal_anchor=True, internal_min_verify=60,
-                 use_collective_rescue=True, use_minimizer_dedup=False,
-                 use_cross_attempt_evidence=True):
+def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
+                       use_internal_anchor=True, internal_min_verify=60,
+                       use_collective_rescue=True, use_minimizer_dedup=False,
+                       use_cross_attempt_evidence=True):
     """
     Greedy seed-extension assembly for one UMI's reads.
 
@@ -1180,6 +1186,35 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
                                        use_internal_anchor=use_internal_anchor,
                                        internal_min_verify=internal_min_verify)
     return [c for c in merged if len(c) >= min_ctg]
+
+
+def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
+                 use_internal_anchor=True, internal_min_verify=60,
+                 use_collective_rescue=True, use_minimizer_dedup=False,
+                 use_cross_attempt_evidence=True, adaptive_seed_k=False,
+                 fallback_seed_k=10):
+    """Assemble one UMI, optionally retrying a strict k-mer run conservatively.
+
+    With ``adaptive_seed_k=True`` and a primary ``seed_k`` larger than
+    ``fallback_seed_k``, the UMI is assembled with the strict k-mer first.  A
+    complete fallback run at the smaller k is attempted only when the strict
+    run produces no contig meeting ``min_ctg``.  The fallback replaces the
+    strict result only when it itself produces a valid contig; this keeps the
+    rule from merging two independently chosen candidate sets or selecting a
+    longer but unsupported fragment.
+    """
+    result = _assemble_umi_once(
+        seqs, min_ov, max_mm, min_ctg, seed_k, use_internal_anchor,
+        internal_min_verify, use_collective_rescue, use_minimizer_dedup,
+        use_cross_attempt_evidence)
+    if (not adaptive_seed_k or seed_k <= fallback_seed_k
+            or any(len(c) >= min_ctg for c in result)):
+        return result
+    fallback = _assemble_umi_once(
+        seqs, min_ov, max_mm, min_ctg, fallback_seed_k, use_internal_anchor,
+        internal_min_verify, use_collective_rescue, use_minimizer_dedup,
+        use_cross_attempt_evidence)
+    return fallback or result
 
 
 def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
@@ -1499,6 +1534,8 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     max_contigs = _CFG["max_contigs"]
     use_dedup = _CFG["use_minimizer_dedup"]
     use_cross_evidence = _CFG["use_cross_attempt_evidence"]
+    adaptive_seed_k = _CFG["adaptive_seed_k"]
+    fallback_seed_k = _CFG["fallback_seed_k"]
 
     seqs = _seqs_from_meta(shared_meta_data2, barcode)
     if not seqs:
@@ -1512,7 +1549,9 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
                                use_internal_anchor=use_anchor,
                                internal_min_verify=anchor_verify,
                                use_minimizer_dedup=use_dedup,
-                               use_cross_attempt_evidence=use_cross_evidence)
+                               use_cross_attempt_evidence=use_cross_evidence,
+                               adaptive_seed_k=adaptive_seed_k,
+                               fallback_seed_k=fallback_seed_k)
 
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock, max_contigs)
@@ -1531,6 +1570,8 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     max_contigs = _CFG["max_contigs"]
     use_dedup = _CFG["use_minimizer_dedup"]
     use_cross_evidence = _CFG["use_cross_attempt_evidence"]
+    adaptive_seed_k = _CFG["adaptive_seed_k"]
+    fallback_seed_k = _CFG["fallback_seed_k"]
 
     r1 = _seqs_from_meta(shared_meta_data1, barcode)
     r2 = _seqs_from_meta(shared_meta_data2, barcode)
@@ -1546,7 +1587,9 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
                                use_internal_anchor=use_anchor,
                                internal_min_verify=anchor_verify,
                                use_minimizer_dedup=use_dedup,
-                               use_cross_attempt_evidence=use_cross_evidence)
+                               use_cross_attempt_evidence=use_cross_evidence,
+                               adaptive_seed_k=adaptive_seed_k,
+                               fallback_seed_k=fallback_seed_k)
 
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock, max_contigs)
@@ -1750,6 +1793,12 @@ def _build_arg_parser():
     ap.add_argument("--min_ctg_len", type=int, default=400)
     ap.add_argument("--min_overlap", type=int, default=20)
     ap.add_argument("--max_mismatch", type=float, default=0.05)
+    ap.add_argument("--seed_k", type=int, default=10,
+                    help="k-mer length for overlap pre-filter [10]")
+    ap.add_argument("--adaptive_seed_k", action="store_true",
+                    help="retry with --fallback_seed_k only if primary k-mer run has no valid contig")
+    ap.add_argument("--fallback_seed_k", type=int, default=10,
+                    help="fallback k-mer length for adaptive_seed_k [10]")
     ap.add_argument("--nth_of_nodes", type=int, default=0)
     ap.add_argument("--r1", type=str, default="denovo/data_R1_sorted.tsv")
     ap.add_argument("--r2", type=str, default="denovo/data_R2_sorted.tsv")
@@ -1806,6 +1855,8 @@ def _configure_from_args(args):
     """
     configure(min_ctg_len=args.min_ctg_len, min_overlap=args.min_overlap,
               max_mismatch=args.max_mismatch, out_id=args.nth_of_nodes,
+              seed_k=args.seed_k, adaptive_seed_k=args.adaptive_seed_k,
+              fallback_seed_k=args.fallback_seed_k,
               polish=not args.no_polish,
               use_internal_anchor=not args.no_internal_anchor,
               internal_min_verify=args.internal_min_verify,
