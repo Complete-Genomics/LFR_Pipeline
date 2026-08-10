@@ -46,9 +46,10 @@ BC_START = 5
 BC_LEN = 15
 
 
-def _assemble_one(seqs, min_ov, min_ctg):
+def _assemble_one(seqs, min_ov, min_ctg, seed_k, adaptive_seed_k):
     """Top-level (picklable) per-barcode worker for the --num_processes>1 path."""
-    return assemble_umi(seqs, min_ov=min_ov, min_ctg=min_ctg)
+    return assemble_umi(seqs, min_ov=min_ov, min_ctg=min_ctg,
+                        seed_k=seed_k, adaptive_seed_k=adaptive_seed_k)
 
 
 def main():
@@ -58,6 +59,8 @@ def main():
                         help="path to sorted TSV (R2) [denovo/data_R2_sorted.tsv]")
     parser.add_argument("--min_ctg", type=int, default=400)
     parser.add_argument("--min_ov",  type=int, default=20)
+    parser.add_argument("--seed_k", type=int, default=10)
+    parser.add_argument("--adaptive_seed_k", action="store_true")
     parser.add_argument("--num_processes", type=int, default=1,
                         help="parallel worker processes [1]. Only affects the "
                              "assemble_umi loop below -- data loading is always "
@@ -80,8 +83,14 @@ def main():
             info = line.rstrip("\n").split("\t")
             if len(info) < 2:
                 continue
-            bc  = info[0][BC_START : BC_START + BC_LEN]
-            seq = info[1]
+            # Current sgrep output is ``BX:Z:<barcode>\t<sequence>``;
+            # older benchmark slices used ``<readname>\t<sequence>`` with
+            # the barcode embedded at positions 5:20.  Keep both parsers so
+            # A/B runs use the actual UMI rather than the literal ``:Z:``.
+            if info[0].startswith("BX:Z:"):
+                bc, seq = info[0][5:20], info[1]
+            else:
+                bc, seq = info[0][BC_START : BC_START + BC_LEN], info[1]
             meta[bc].append(seq)
             if len(meta) >= args.n and bc in meta:
                 # stop once we have collected enough distinct barcodes
@@ -99,9 +108,11 @@ def main():
     # ── benchmark ─────────────────────────────────────────────────────────────
     t0 = time.perf_counter()
     if args.num_processes == 1:
-        results = [_assemble_one(meta[bc], args.min_ov, args.min_ctg) for bc in barcodes]
+        results = [_assemble_one(meta[bc], args.min_ov, args.min_ctg,
+                                 args.seed_k, args.adaptive_seed_k) for bc in barcodes]
     else:
-        worker = partial(_assemble_one, min_ov=args.min_ov, min_ctg=args.min_ctg)
+        worker = partial(_assemble_one, min_ov=args.min_ov, min_ctg=args.min_ctg,
+                         seed_k=args.seed_k, adaptive_seed_k=args.adaptive_seed_k)
         with mp.Pool(args.num_processes) as pool:
             results = pool.map(worker, [meta[bc] for bc in barcodes])
     elapsed = time.perf_counter() - t0
