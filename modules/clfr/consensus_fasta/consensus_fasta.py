@@ -44,6 +44,7 @@ parser.add_argument("--min_reads", type=int, required=False)
 parser.add_argument("--downsample_ratio", type=float, default=1.0, required=False)
 parser.add_argument("--batch_id", type=str, default="", required=False)
 parser.add_argument("--samtools", type=str, default=None, required=False)
+parser.add_argument("--temp_dir", type=str, default="/dev/shm", required=False)
 parser.add_argument("--use_samtools_reference", action="store_true")
 
 args = parser.parse_args()
@@ -58,6 +59,7 @@ MIN_READS = args.min_reads
 DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
 SAMTOOLS_ARG = args.samtools
+TEMP_DIR_PARENT = args.temp_dir
 USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
 
 if DOWNSAMPLE_RATIO <= 0 or DOWNSAMPLE_RATIO > 1:
@@ -112,12 +114,15 @@ log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENS
 EMPTY_CONSENSUS_COUNT = 0
 
 # MIN_READS = 50
-TEMP_BASE_DIR = f"/dev/shm/consensus_tmp_{os.getpid()}"
-TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
+# temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
+# ./Align -> ./Align/consensus_tmp_<pid>.
+TEMP_DIR_NAME = f"consensus_tmp_{os.getpid()}"
+TEMP_BASE_DIR = os.path.join((TEMP_DIR_PARENT or "/dev/shm").rstrip(os.sep), TEMP_DIR_NAME)
 FALLBACK_TEMP_DIR = "/tmp"
 
 def make_temp_dir(chrom, split_index, batch_id):
-    for base_dir in (os.path.join(TEMP_BASE_DIR, "consensus"), os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")):
+    fallback_root = os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")
+    for base_dir in (TEMP_BASE_DIR, fallback_root):
         temp_dir = (
             os.path.join(base_dir, batch_id, f"{chrom}_{split_index}")
             if batch_id else os.path.join(base_dir, f"{chrom}_{split_index}")
@@ -132,6 +137,7 @@ def make_temp_dir(chrom, split_index, batch_id):
     raise OSError("No writable temporary directory available for consensus generation")
 
 TEMP_DIR = make_temp_dir(chrom, split_index, BATCH_ID)
+sys.stderr.write(f"Using consensus temp directory: {TEMP_DIR}\n")
 current_temp_dir = TEMP_DIR
 
 # --- Global variable for FASTA reference ---
