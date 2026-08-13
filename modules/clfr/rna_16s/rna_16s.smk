@@ -18,7 +18,7 @@ MAX_READS_BC = config['params'].get('max_reads_bc', 1000)
 
 # Tool paths from config
 PYTHON = config['params'].get('general_python', 'python3')
-SPADES = config['frag_de_novo'].get('denovo_assembler', 'SPAdes-3.14.0-Linux/bin/spades.py')
+SPADES = config['frag_de_novo'].get('spades', 'SPAdes-3.14.0-Linux/bin/spades.py')
 QUAST = config['frag_de_novo'].get('quast_dir', 'quast/quast.py')
 MINIMAP = config['frag_de_novo'].get('minimap', 'minimap2-2.16_x64-linux/minimap2')
 SAMTOOLS = config['params'].get('samtools', 'samtools')
@@ -110,9 +110,7 @@ rule frag_denovo_bc2fq:
 # Step 3.3: SPAdes assembly + get max contig for each barcode
 rule frag_denovo_spades:
     input:
-        done="rna_16s/frag_denovo/fq/bc2fq.done",
-        r1="rna_16s/frag_denovo/fq/{bc}.1.fq.gz",
-        r2="rna_16s/frag_denovo/fq/{bc}.2.fq.gz"
+        done="rna_16s/frag_denovo/fq/bc2fq.done"
     output:
         contigs="rna_16s/frag_denovo/spades/{bc}/contigs_max.fasta"
     params:
@@ -120,19 +118,21 @@ rule frag_denovo_spades:
         python=PYTHON,
         get_max_fa=SCRIPT_DIR + '/get_max_fa.py',
         out_dir="rna_16s/frag_denovo/spades/{bc}",
+        r1="rna_16s/frag_denovo/fq/{bc}.1.fq.gz",
+        r2="rna_16s/frag_denovo/fq/{bc}.2.fq.gz",
         threads=4,
         sequence_type=SEQUENCE_TYPE
     run:
         if params.sequence_type == "pe":
             shell(
                 "{params.spades} -k 55 -t {params.threads} "
-                "-1 {input.r1} -2 {input.r2} "
+                "-1 {params.r1} -2 {params.r2} "
                 "-o {params.out_dir}"
             )
         elif params.sequence_type == "se":
             shell(
                 "{params.spades} -k 55 -t {params.threads} "
-                "-s {input.r2} "
+                "-s {params.r2} "
                 "-o {params.out_dir}"
             )
         else:
