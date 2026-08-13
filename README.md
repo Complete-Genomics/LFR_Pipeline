@@ -1,14 +1,14 @@
 # CGI LFR Pipeline
  
-This pipeline is for various CGI LFR (stLFR: Single Tube Long Fragment Read and cLFR: Complete LFR) DNA sequencing applications, with a focus on QC and assay development troubleshooting.   
-It is a refactor of the legacy CGI LFR/WGS pipeline focused on resolving technical debt, improving maintainability, and making workflow behavior easier to reproduce.  
-For production pipeline, see [cWGS](https://github.com/Complete-Genomics/DNBSEQ_Complete_WGS/tree/test?tab=readme-ov-file).  
+This pipeline is for various CGI LFR (stLFR: Single Tube Long Fragment Read and cLFR: Complete LFR) DNA sequencing applications, with a focus on cLFR.   
+It is a refactor of the legacy CGI LFR/WGS pipeline focused on resolving technical debt, improving QC, maintainability, and making workflow behavior easier to reproduce.  
+For production stLFR pipeline, see [cWGS](https://github.com/Complete-Genomics/DNBSEQ_Complete_WGS/tree/test?tab=readme-ov-file).  
 
 ## Background
 
 The stLFR/cLFR technology co-barcodes short reads from the same long DNA fragment for both CoolMPS and StandardMPS sequencing. By clustering reads sharing the same barcode, it delivers pseudo-long-read resolution at the cost of standard short-read sequencing. This positions it as an attractive, cost-effective alternative for large-scale production WGS, bridging the gap between conventional Illumina short reads and more expensive long-read platforms like PacBio.
 
-## Key Engineering Highlights
+## Key Production Highlights
 
 ### De novo assembly tuned for per-UMI reconstruction (`modules/clfr/denovo/`)
 
