@@ -3,6 +3,9 @@ import sys
 
 
 PIPELINE_ROOT = Path(workflow.basedir).resolve().parent
+sys.path.insert(0, str(PIPELINE_ROOT / "src"))
+
+from run_metadata import record_run_metadata_safely
 
 
 def _is_placeholder(value):
@@ -46,3 +49,7 @@ for _name, _default in {
     "featurecounts": "featureCounts",
 }.items():
     _set_default_param(_name, _default)
+
+
+onstart:
+    record_run_metadata_safely(PIPELINE_ROOT, config)

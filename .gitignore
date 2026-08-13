@@ -9,3 +9,4 @@ config/
 resources/
 modules/clfr/denovo/test/
 subprojects/
+run_metadata/
