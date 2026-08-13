@@ -38,6 +38,8 @@ rule select_denovo_barcodes:
         "split_stat_read1.log"
     output:
         "denovo/filtered_barcode_freq.txt"
+    benchmark:
+        "Benchmarks/denovo.select_denovo_barcodes.txt"
     params:
         reads_per_BC = config['frag_de_novo']['reads_per_BC']
     shell:
@@ -54,6 +56,8 @@ rule filter_reads1:
         read="data/split_read_1_trimmed.fastq.gz"
     output:
         "denovo/data_R1_filtered.fastq.gz"
+    benchmark:
+        "Benchmarks/denovo.filter_reads1.txt"
     params:
         bgzip = config['params']['bgzip'],
     run:
@@ -70,6 +74,8 @@ rule filter_reads2:
         read="data/split_read_2_trimmed.fastq.gz"
     output:
         "denovo/data_R2_filtered.fastq.gz"
+    benchmark:
+        "Benchmarks/denovo.filter_reads2.txt"
     params:
         bgzip = config['params']['bgzip'],
     run:
@@ -82,6 +88,8 @@ rule reformat_fasta1:
         "denovo/data_R1_filtered.fastq.gz"
     output:
         "denovo/data_R1_sorted.tsv"
+    benchmark:
+        "Benchmarks/denovo.reformat_fasta1.txt"
     params:
         sequence_type = config['params']['sequence_type'].lower(),
         sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
@@ -107,6 +115,8 @@ rule reformat_fasta2:
         "denovo/data_R2_filtered.fastq.gz"
     output:
         "denovo/data_R2_sorted.tsv"
+    benchmark:
+        "Benchmarks/denovo.reformat_fasta2.txt"
     params:
         sort_mem = config['frag_de_novo'].get('sort_mem', '4G'),
         sort_tmp_dir = config['frag_de_novo'].get('sort_tmp_dir', 'denovo/tmp_sort')

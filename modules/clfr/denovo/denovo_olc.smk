@@ -163,11 +163,62 @@ def qc_setting(key):
 ## It reports the sample's cross-barcode identity distribution as a diagnostic
 ## but deliberately does NOT auto-tune the conflict threshold from it: that was
 ## implemented, measured against ground truth, and rejected (sec 33).
+
+
+## --- Learned read-quality score (denovo.md sec 51/59/62-67): validated as a
+## conflict-graph tie-break (mean identity +0.03..+0.07 vs the plain filter,
+## significant across 4 independent samples + a 10k-UMI scale check), but NOT
+## yet wired into the default DAG above -- readFilter_olc still calls the
+## plain denovo_read_filter.py. These two rules exist so the sort and feature
+## steps can be benchmarked and validated on real runs before that switch is
+## made; nothing downstream depends on their output yet.
+##
+## sortFastq_olc keeps quality, which reformat_fasta2 (rule above) discards --
+## the score model needs 5 quality-derived features reformat_fasta2's TSV
+## cannot supply. samtools sort -t BX rather than sort(1): ~7x faster
+## (denovo.md sec 65), and PE is out of scope for now (both rules are SE-only,
+## matching denovo_read_features.py and --r2_format fastq).
+rule sortFastq_olc:
+    input:
+        "data/split_read_2_trimmed.fastq.gz"
+    output:
+        "denovo/data_R2_sorted_qual.fastq.gz"
+    benchmark:
+        "Benchmarks/denovo.sortFastq_olc.txt"
+    params:
+        samtools = config['params'].get('samtools', 'samtools'),
+        src_dir = config['params']['src_dir'],
+        threads = config['frag_de_novo']['num_processes']
+    shell:
+        "bash {params.src_dir}/modules/clfr/denovo/denovo_sort_fastq.sh "
+        "{input} {output} {params.threads} {params.samtools}"
+
+
+## Per-read features for the score model (denovo_read_features.py). O(n)
+## minimizer + per-barcode process pool: 75.5s -> 9.8s on 132k reads (sec 64).
+rule extractReadFeatures_olc:
+    input:
+        "denovo/data_R2_sorted_qual.fastq.gz"
+    output:
+        "denovo/read_features.tsv"
+    benchmark:
+        "Benchmarks/denovo.extractReadFeatures_olc.txt"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        num_processes = config['frag_de_novo']['num_processes']
+    shell:
+        "{params.python} {params.src_dir}/modules/clfr/denovo/denovo_read_features.py "
+        "--fastq {input} --out {output} --num_processes {params.num_processes}"
+
+
 rule readFilterProbe_olc:
     input:
         "denovo/data_R2_sorted.tsv"
     output:
         "denovo/read_filter_probe.tsv"
+    benchmark:
+        "Benchmarks/denovo.readFilterProbe_olc.txt"
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'],
@@ -197,6 +248,8 @@ rule readFilter_olc:
         dropped="denovo/data_R2_readfilt.dropped.tsv",
         report="denovo/read_filter_report.tsv",
         decision="denovo/qc_decision.tsv"
+    benchmark:
+        "Benchmarks/denovo.readFilter_olc.txt"
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'],
@@ -248,6 +301,8 @@ rule run_denovoOLC_parallel:
         "denovo/data_R2_readfilt.tsv"
     output:
         "denovo/frag_denovo_done"
+    benchmark:
+        "Benchmarks/denovo.run_denovoOLC_parallel.txt"
     params:
         num_processes = config['frag_de_novo']['num_processes'],
         sequence_type = config['params']['sequence_type'],
@@ -292,6 +347,8 @@ rule filterOLC_longest:
         "denovo/frag_denovo_done"
     output:
         "denovo/denovo.longest.fasta"
+    benchmark:
+        "Benchmarks/denovo.filterOLC_longest.txt"
     params:
         run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
