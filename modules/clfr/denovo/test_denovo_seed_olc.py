@@ -14,6 +14,7 @@ import sys
 import os
 import tempfile
 import unittest
+from collections import defaultdict
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -288,6 +289,34 @@ class TestCrossAttemptEvidenceToggle(unittest.TestCase):
         self.assertTrue(
             inspect.signature(m.configure).parameters["use_cross_attempt_evidence"].default)
         self.assertTrue(m._CFG["use_cross_attempt_evidence"])
+
+
+class TestAdaptiveSeedK(unittest.TestCase):
+    def test_fallback_only_when_primary_has_no_valid_contig(self):
+        calls = []
+
+        def fake_once(seqs, *args, **kwargs):
+            calls.append(kwargs.get("seed_k", args[3] if len(args) > 3 else None))
+            return [] if len(calls) == 1 else ["A" * 400]
+
+        with mock.patch.object(m, "_assemble_umi_once", side_effect=fake_once):
+            out = m.assemble_umi(["A" * 400], seed_k=17,
+                                 adaptive_seed_k=True, fallback_seed_k=10)
+        self.assertEqual(out, ["A" * 400])
+        self.assertEqual(calls, [17, 10])
+
+    def test_valid_primary_does_not_pay_for_fallback(self):
+        calls = []
+
+        def fake_once(seqs, *args, **kwargs):
+            calls.append(1)
+            return ["A" * 400]
+
+        with mock.patch.object(m, "_assemble_umi_once", side_effect=fake_once):
+            out = m.assemble_umi(["A" * 400], seed_k=17,
+                                 adaptive_seed_k=True, fallback_seed_k=10)
+        self.assertEqual(out, ["A" * 400])
+        self.assertEqual(len(calls), 1)
 
     def test_false_restricts_evidence_set_to_none_regardless_of_pool_size(self):
         rng = random.Random(60)
@@ -741,6 +770,137 @@ class TestMultiprocessingConfigPropagation(unittest.TestCase):
         path = out_file.format(id=0)
         content = open(path).read() if os.path.exists(path) else ""
         self.assertEqual(content.strip(), "")
+
+
+class TestLowComplexityBarcodeRejected(unittest.TestCase):
+    """Production incident (hs1 sample): a corrupted barcode is a
+    base-calling artifact, not a real UMI, and its reads are frequently
+    homopolymer-heavy too -- the internal-anchor fallback finds spurious
+    anchors anywhere inside near-monobase reads and chains them without
+    bound. One such barcode produced an 8-contig, 127kb 'assembly' of what
+    should be a <=1.6kb amplicon.
+
+    Only rejects barcodes containing 'N', not "mostly one base" -- an
+    earlier version used the latter (matching denovo_qc_probe.py's
+    is_low_complexity, 80% one-base threshold) and it was a false-positive
+    generator: checked against a real 3000-barcode sample, it would have
+    silently dropped 339 (11.3%) of them, all producing ordinary contigs
+    with no resemblance to the incident (denovo.md sec 60). Fraction alone
+    can't even cleanly separate good from bad here -- one of the actual
+    incident barcodes and an entirely ordinary "AAAAAAAAAAAAAAA" barcode
+    both sit at ~0.93-1.0 single-base fraction. N-in-barcode has no such
+    ambiguity: a real barcode that passed whitelist correction should
+    never contain one.
+    """
+
+    def test_barcode_with_n_is_rejected(self):
+        self.assertTrue(m._is_low_complexity_barcode("AAAAAAAAAAAAANA"))
+
+    def test_mostly_single_base_barcode_without_n_is_not_rejected(self):
+        # An actual incident barcode (93% 'A', no 'N') -- deliberately NOT
+        # caught here anymore; see class docstring. Bounded instead by
+        # _extend_one_contig's max_contig_len (TestMaxContigLenBackstop).
+        self.assertFalse(m._is_low_complexity_barcode("AAAAAAAAAATAAAA"))
+
+    def test_ordinary_homopolymer_barcode_is_not_rejected(self):
+        # A plain "all one base" barcode is common and legitimate in this
+        # UMI design (denovo.md sec 60) -- must not be dropped.
+        self.assertFalse(m._is_low_complexity_barcode("AAAAAAAAAAAAAAA"))
+
+    def test_ordinary_diverse_barcode_is_not_rejected(self):
+        self.assertFalse(m._is_low_complexity_barcode("ACGTACGTACGTACG"))
+
+    def test_is_cached_because_add_sgrep_line_calls_it_once_per_read_not_per_umi(self):
+        """_add_sgrep_line has no per-barcode grouping available at its
+        streaming, line-at-a-time layer, so without caching this re-runs
+        the same verdict on every read of a UMI -- tens of millions of
+        redundant calls at production depth (measured ~10x slower
+        uncached on a 3000-barcode/132k-read slice). A regression here
+        wouldn't fail any correctness test, only make ingestion slow
+        again, hence this explicit guard on the decorator itself.
+        """
+        self.assertTrue(hasattr(m._is_low_complexity_barcode, "cache_info"))
+        m._is_low_complexity_barcode.cache_clear()
+        for _ in range(10):
+            m._is_low_complexity_barcode("ACGTACGTACGTACG")
+        info = m._is_low_complexity_barcode.cache_info()
+        self.assertEqual(info.misses, 1)
+        self.assertEqual(info.hits, 9)
+
+    def test_add_sgrep_line_skips_barcode_with_n(self):
+        meta = defaultdict(list)
+        # BX:Z: (5 chars) + 15-char barcode + " @readid", then \t + seq
+        added = m._add_sgrep_line(meta, "BX:Z:AAAAAAAAAAAAANA @readid1\tACGTACGT\n")
+        self.assertFalse(added)
+        self.assertEqual(dict(meta), {})
+
+    def test_add_sgrep_line_accepts_a_normal_homopolymer_barcode(self):
+        meta = defaultdict(list)
+        added = m._add_sgrep_line(meta, "BX:Z:AAAAAAAAAAAAAAA @readid1\tACGTACGT\n")
+        self.assertTrue(added)
+        self.assertEqual(meta["AAAAAAAAAAAAAAA"], [">readid1", "ACGTACGT"])
+
+    def test_add_sgrep_line_still_accepts_a_normal_barcode(self):
+        meta = defaultdict(list)
+        added = m._add_sgrep_line(meta, "BX:Z:ACGTACGTACGTACG @readid1\tACGTACGT\n")
+        self.assertTrue(added)
+        self.assertEqual(meta["ACGTACGTACGTACG"], [">readid1", "ACGTACGT"])
+
+
+class TestMaxContigLenBackstop(unittest.TestCase):
+    """_extend_one_contig's max_contig_len backstop: the class docstring on
+    TestLowComplexityBarcodeRejected explains why barcode-string filtering
+    can't reliably catch every incident (fraction alone can't separate a
+    real bad barcode from an ordinary homopolymer one). This is the
+    defense that doesn't need to: it bounds growth directly on the thing
+    that's actually unbounded (contig length), regardless of cause.
+    """
+
+    @staticmethod
+    def _overlapping_read_chain(n_reads, read_len=40, step=10, seed=1):
+        # A real (pseudo-random, deterministic) sequential overlap chain --
+        # each read shares `read_len - step` bp with the next -- rather than
+        # a homopolymer, so a plain string-length check can't be fooled by
+        # every read trivially "matching" without the contig actually
+        # growing (an all-'A' construction hit exactly that: _extend_one_contig
+        # reported every read "used" while the contig stayed at its seed
+        # length the whole time). This still exercises the same growth
+        # mechanism the incident's homopolymer reads triggered -- boundary
+        # extension finding a valid next read at (nearly) every offset --
+        # just with a chain long and unambiguous enough to assert on.
+        rng = random.Random(seed)
+        backbone_len = read_len + step * n_reads
+        backbone = "".join(rng.choice("ACGT") for _ in range(backbone_len))
+        return [backbone[i:i + read_len]
+                for i in range(0, backbone_len - read_len, step)]
+
+    def test_extension_stops_once_max_contig_len_is_exceeded(self):
+        reads = self._overlapping_read_chain(n_reads=300)
+        contig, used = m._extend_one_contig(
+            reads, set(range(len(reads))), min_ov=20, max_mm=0.05, seed_k=10,
+            use_internal_anchor=False, kmer_index_holder=[None],
+            max_contig_len=200)
+        self.assertLessEqual(len(contig), 200 + 40)  # one extension past the cap is fine
+        self.assertLess(len(used), len(reads))  # did not consume every read
+
+    def test_none_means_unbounded_legacy_behavior(self):
+        reads = self._overlapping_read_chain(n_reads=300)
+        contig, used = m._extend_one_contig(
+            reads, set(range(len(reads))), min_ov=20, max_mm=0.05, seed_k=10,
+            use_internal_anchor=False, kmer_index_holder=[None],
+            max_contig_len=None)
+        self.assertEqual(len(used), len(reads))  # consumed everything, no cap applied
+
+    def test_assemble_umi_scales_the_cap_from_min_ctg(self):
+        """Wired through assemble_umi -> _assemble_umi_once with
+        max(min_ctg * 5, 3000); a pathological pool should never produce a
+        contig anywhere near the 127kb incident size regardless of min_ctg.
+        """
+        reads = self._overlapping_read_chain(n_reads=300)
+        contigs = m.assemble_umi(reads, min_ov=20, max_mm=0.05, min_ctg=400,
+                                 seed_k=10, use_internal_anchor=False)
+        self.assertTrue(all(len(c) < 5000 for c in contigs))
+        self.assertGreater(max(len(c) for c in contigs), 3000)  # cap engaged, not a no-op
 
 
 if __name__ == "__main__":

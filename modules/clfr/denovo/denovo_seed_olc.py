@@ -116,9 +116,11 @@ forward match exists. On by default; disable with
 configure(use_internal_anchor=False) or CLI --no_internal_anchor.
 """
 
+import gzip
 import itertools
 import os
 from collections import defaultdict, Counter
+from functools import lru_cache
 
 # ── module-level config (set via configure() before multiprocessing) ──────────
 
@@ -926,7 +928,8 @@ def internal_anchor_extend_indexed(contig, pool, kmer_index, unused_set,
 def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anchor=True,
                        internal_min_verify=60, kmer_index_holder=None,
                        internal_check_len=None, collective_index_holder=None,
-                       collective_evidence_set=None, boundary_index=None):
+                       collective_evidence_set=None, boundary_index=None,
+                       max_contig_len=None):
     """
     Build a single greedy-extended contig from the longest still-available
     read in `pool` (a FIXED list of sequences that is never reindexed --
@@ -969,6 +972,21 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
     removes reads that cannot pass suffix_prefix_overlap's existing mandatory
     pre-filter; overlap validation and deterministic candidate order are
     unchanged. None retains the legacy full-pool scan.
+
+    max_contig_len: stop extending once the contig reaches this length,
+    returning whatever was built so far, instead of continuing until
+    `unused` is exhausted. None (default) is unbounded -- the legacy
+    behavior. Backstops against pathological input: a near-monobase read
+    pool (e.g. a corrupted barcode's reads, or any other source of
+    homopolymer-heavy sequence) gives boundary/internal-anchor overlap
+    detection spurious matches at nearly every offset, so the loop below
+    can keep finding a "valid" next read indefinitely. A production
+    barcode this shape produced a 127kb single contig for what should be
+    a <=1.6kb amplicon (denovo.md sec 60) -- filtering likely-corrupted
+    barcodes upstream catches most of this class, but not all of it (that
+    same incident had two contigs from barcodes with no detectable string
+    corruption), so this is the backstop that doesn't depend on
+    recognizing the cause in advance.
     """
     seed_idx = min(available)
     contig = pool[seed_idx]
@@ -977,6 +995,8 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
 
     changed = True
     while changed:
+        if max_contig_len is not None and len(contig) > max_contig_len:
+            break
         changed = False
         # iterate in ascending index order (== pool's longest-first sort
         # order): sets don't preserve insertion order, and trying
@@ -1159,16 +1179,22 @@ def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
 
     available = set(range(len(pool)))
     raw_contigs = []
-    # Do not cap this pre-merge phase.  A greedy attempt may strand a valid
-    # component until the fifth or later seed; applying the user-visible final
-    # output cap here would prevent _dedupe_and_merge_contigs from seeing it.
+    # Do not cap this pre-merge phase's LENGTH TARGET (min_ctg) here.  A greedy
+    # attempt may strand a valid component until the fifth or later seed;
+    # applying the user-visible final output floor here would prevent
+    # _dedupe_and_merge_contigs from seeing it. max_contig_len below is a
+    # different thing -- a runaway-growth backstop, not a target -- so it
+    # applies at this raw stage where the pathological growth actually
+    # happens (denovo.md sec 60).
+    max_contig_len = max(min_ctg * 5, 3000)
     while available:
         contig, used = _extend_one_contig(pool, available, min_ov, max_mm, seed_k,
                                           use_internal_anchor, internal_min_verify,
                                           kmer_index_holder=kmer_index_holder,
                                           collective_index_holder=collective_index_holder,
                                           collective_evidence_set=collective_evidence_set,
-                                          boundary_index=boundary_index)
+                                          boundary_index=boundary_index,
+                                          max_contig_len=max_contig_len)
         # collect every attempt regardless of length -- filtering by min_ctg
         # here (before _dedupe_and_merge_contigs runs) would silently
         # discard pieces that individually fall short but would merge with
@@ -1184,7 +1210,8 @@ def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
 
     merged = _dedupe_and_merge_contigs(raw_contigs, min_ov, max_mm, seed_k,
                                        use_internal_anchor=use_internal_anchor,
-                                       internal_min_verify=internal_min_verify)
+                                       internal_min_verify=internal_min_verify,
+                                       max_contig_len=max_contig_len)
     return [c for c in merged if len(c) >= min_ctg]
 
 
@@ -1218,7 +1245,8 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
 
 
 def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
-                              use_internal_anchor=True, internal_min_verify=60):
+                              use_internal_anchor=True, internal_min_verify=60,
+                              max_contig_len=None):
     """
     Post-process the contig list from one UMI: the outer loop in
     assemble_umi builds each contig from a single greedy pass, so a read
@@ -1261,6 +1289,14 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
        another, not at either edge -- suffix_prefix_overlap only checks
        boundaries so it won't catch this) -- the contained one adds no
        new sequence, so it's simply dropped.
+
+    max_contig_len: forwarded to _extend_one_contig (see its docstring).
+    Required here too, not just on the raw-building phase in
+    _assemble_umi_once: a pathological pool that hits the cap on every raw
+    attempt produces several capped-length raw contigs, and merging those
+    back together uncapped defeats the raw-phase cap entirely (a real
+    incident barcode did exactly this -- 8 raw attempts at ~3kb each
+    re-merged into one 24kb contig before this parameter existed here).
     """
     if len(contigs) <= 1:
         return contigs
@@ -1283,7 +1319,8 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
                                           internal_min_verify=internal_min_verify,
                                           kmer_index_holder=kmer_index_holder,
                                           internal_check_len=wide_check_len,
-                                          boundary_index=boundary_index)
+                                          boundary_index=boundary_index,
+                                          max_contig_len=max_contig_len)
         merged.append(contig)
         available -= used
 
@@ -1597,6 +1634,39 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
 
 # ── sgrep TSV parsing (same format as denovo_clfr_ram.add_sgrep_line) ──────────
 
+@lru_cache(maxsize=4096)
+def _is_low_complexity_barcode(barcode):
+    """Reject barcodes containing an ambiguous base call ('N'), which
+    should be unreachable for a barcode that survived correction against a
+    fixed whitelist and signals a base-calling artifact, not a real UMI
+    (denovo.md sec 29 first described these as "AAAA...-style artifacts";
+    sec 60 traced a concrete production failure to them).
+
+    NOT a general low-complexity/homopolymer-fraction filter: an earlier
+    version rejected any barcode >=80% one base, copying
+    denovo_qc_probe.py's is_low_complexity() threshold verbatim. That
+    threshold is fine for is_low_complexity()'s own job (nudge a diagnostic
+    probe's random sample away from artifacts -- over-excluding there just
+    means a slightly different sample, never data loss), but reused as a
+    hard rejection gate on production assembly it was a false-positive
+    generator: real barcodes in this UMI design are legitimately
+    single-base-dominated (e.g. a plain "AAAAAAAAAAAAAAA" with normal
+    reads and a normal ~1.3kb contig is common), and thread-through-the-
+    fraction-threshold checking on a real 3000-barcode sample (denovo.md
+    sec 60) found 339 of them (11.3%) -- all producing ordinary contigs,
+    none resembling the actual incident -- would have been silently
+    dropped. Worse, fraction alone can't even cleanly separate good from
+    bad: one of the actual incident barcodes and the ordinary
+    "AAAAAAAAAAAAAAA" case sit at the same >=0.93 single-base fraction, so
+    no threshold choice avoids both false positives and false negatives.
+    N-in-barcode has no such ambiguity and produced zero false positives
+    on the same sample. The two non-N incident barcodes this therefore
+    misses are still bounded by _extend_one_contig's max_contig_len --
+    that backstop doesn't need to guess the cause in advance.
+    """
+    return "N" in barcode
+
+
 def _add_sgrep_line(meta_data, line):
     """
     Parse one line of denovo/data_R{1,2}_sgrep.tsv into meta_data[barcode].
@@ -1609,11 +1679,71 @@ def _add_sgrep_line(meta_data, line):
     if len(info) < 2:
         return False
     bc = info[0][5:5 + bc_len]
+    if _is_low_complexity_barcode(bc):
+        return False
     rid = ">" + info[0][22:]
     seq = info[1]
     meta_data[bc].append(rid)
     meta_data[bc].append(seq)
     return True
+
+
+def _add_fastq_record(meta_data, header, seq):
+    """FASTQ counterpart of _add_sgrep_line, for --r2_format fastq.
+
+    The sgrep TSV's readname column is the FASTQ header with the leading '@'
+    replaced by nothing and the quality lines dropped, so the barcode sits at
+    the same offsets once the '@' is accounted for. Parsed from the header
+    text rather than by offset, though, since a FASTQ fed here may not have
+    gone through reformat_fasta2's column layout at all.
+    """
+    rid = header.rstrip("\n")[1:].split("\t")[0]
+    try:
+        bc = rid.split("#")[1].split("/")[0]
+    except IndexError:
+        return False
+    if len(bc) != 15 or _is_low_complexity_barcode(bc):
+        return False
+    meta_data[bc].append(">" + rid)
+    meta_data[bc].append(seq.rstrip("\n"))
+    return True
+
+
+def _iter_se_chunks_fastq(r2_path, start_idx, n_line_chunk):
+    """Same contract as _iter_se_chunks but reading a BARCODE-SORTED FASTQ.
+
+    Exists so the learned-score path does not have to materialize a second
+    copy of the reads: denovo_read_features.py already needs a barcode-sorted
+    FASTQ (it needs the quality strings), and without this the same data would
+    then be rewritten as a TSV purely to be assembled. Measured tradeoff in
+    denovo.md sec 65.
+
+    start_idx/n_line_chunk stay in units of READS, not lines, so --start_idx
+    and --n_line_chunk keep meaning the same thing across both formats.
+    """
+    opener = gzip.open if r2_path.endswith(".gz") else open
+    with opener(r2_path, "rt") as f:
+        for _ in range(start_idx):
+            if not f.readline():
+                break
+            f.readline(); f.readline(); f.readline()
+        chunk_start = start_idx
+        while True:
+            meta_data2 = defaultdict(list)
+            n_reads = 0
+            for _ in range(n_line_chunk):
+                header = f.readline()
+                if not header:
+                    break
+                seq = f.readline()
+                f.readline()
+                f.readline()
+                if _add_fastq_record(meta_data2, header, seq):
+                    n_reads += 1
+            if n_reads == 0:
+                break
+            yield chunk_start, meta_data2
+            chunk_start += n_reads
 
 
 def _iter_se_chunks(r2_path, start_idx, n_line_chunk):
@@ -1802,6 +1932,12 @@ def _build_arg_parser():
     ap.add_argument("--nth_of_nodes", type=int, default=0)
     ap.add_argument("--r1", type=str, default="denovo/data_R1_sorted.tsv")
     ap.add_argument("--r2", type=str, default="denovo/data_R2_sorted.tsv")
+    ap.add_argument("--r2_format", choices=["tsv", "fastq"], default="tsv",
+                    help="format of --r2. 'fastq' reads a BARCODE-SORTED FASTQ "
+                         "(.gz ok) directly, skipping the TSV conversion -- only "
+                         "useful when a sorted FASTQ already exists for the "
+                         "learned-score path (denovo_read_features.py needs the "
+                         "quality strings). SE only; PE still requires TSVs.")
     ap.add_argument("--n", type=int, default=None,
                     help="only assemble the first N UMIs total, across all chunks "
                          "(config: frag_de_novo.assembly_N_umi); default/empty = all UMIs")
@@ -1936,7 +2072,9 @@ def _main_cli():
                 if args.n is not None and processed_umi >= args.n:
                     break
         else:
-            for chunk_start, m2 in _iter_se_chunks(args.r2, args.start_idx, args.n_line_chunk):
+            se_reader = (_iter_se_chunks_fastq if args.r2_format == "fastq"
+                         else _iter_se_chunks)
+            for chunk_start, m2 in se_reader(args.r2, args.start_idx, args.n_line_chunk):
                 if args.n is not None:
                     remaining = args.n - processed_umi
                     if remaining <= 0:

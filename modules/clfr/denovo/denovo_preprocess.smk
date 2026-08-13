@@ -13,6 +13,27 @@ def count_lines():
     return (((line_count%4)+1)%4)
 
 rule select_denovo_barcodes:
+    # Also rejects barcodes containing an ambiguous base call ('N') here, at
+    # the one place both assemblers' barcode admission funnels through. An
+    # 'N' surviving into the final assigned barcode should be unreachable
+    # for one that passed whitelist correction, and signals a base-calling
+    # artifact, not a real UMI (denovo.md sec 29, sec 60).
+    #
+    # An earlier version of this check instead rejected any barcode >=80%
+    # one base (matching denovo_qc_probe.py's is_low_complexity(), fine for
+    # that function's own job of nudging a diagnostic probe's sample away
+    # from artifacts, since over-excluding there costs nothing). Reused as a
+    # hard rejection gate here it was a false-positive generator: real
+    # barcodes in this UMI design are legitimately single-base-dominated
+    # (a plain "AAAAAAAAAAAAAAA" with normal reads and a normal ~1.3kb
+    # contig is common), and checking that threshold against a real
+    # 3000-barcode sample found 339 (11.3%) that would have been silently
+    # dropped, all producing ordinary contigs -- see denovo.md sec 60 for
+    # the full false-positive investigation, including why no fraction
+    # threshold can cleanly separate real incidents from ordinary
+    # low-diversity barcodes here. The two known incident barcodes with no
+    # 'N' are instead bounded by denovo_seed_olc.py's _extend_one_contig
+    # max_contig_len backstop, which doesn't need to guess the cause.
     input:
         "split_stat_read1.log"
     output:
@@ -23,7 +44,7 @@ rule select_denovo_barcodes:
         """
         mkdir -p denovo
         awk -F '\\t' -v cutoff={params.reads_per_BC} \
-            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff {{print "BX:Z:" $3}}' \
+            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff && $3 !~ /N/ {{print "BX:Z:" $3}}' \
             {input} > {output}
         """
 
