@@ -10,7 +10,8 @@ The stLFR/cLFR technology co-barcodes short reads from the same long DNA fragmen
 
 ## Key Production Highlights
 
-### De novo assembly tuned for per-UMI reconstruction (`modules/clfr/denovo/`)
+### De novo assembly tuned for per-UMI reconstruction 
+(`modules/clfr/denovo/`)
 
 Each cLFR UMI barcodes the reads from a single short DNA fragment — a different regime from genome-scale assembly, built around single-end 600bp (SE600) reads rather than paired-end. `denovo_seed_olc.py` implements a lightweight greedy Overlap-Layout-Consensus (OLC) assembler for this regime, replacing a prior de Bruijn graph (megahit, k=41) approach. Full design at [denovo_OLC](https://github.com/Complete-Genomics/denovo_OLC); highlights:
 
@@ -20,7 +21,8 @@ Each cLFR UMI barcodes the reads from a single short DNA fragment — a differen
 - **Engineered for 3M-UMI scale** — a boundary k-mer inverted index cut a documented worst-case single-UMI runtime from 100.2s to 5.07s; deterministic-by-construction output; `fork`/`spawn`-correct multiprocessing scheduled for the heavy-tailed per-barcode cost distribution real data has.
 - **Reference-free QC** — chimera detection by verified-spanning-depth collapse (AUC 0.827 against mock-community ground truth, where naive read-back checks and off-the-shelf detectors perform near chance), plus a diversity-adaptive QC preset chosen per run from the sample's own cross-barcode identity distribution and logged for audit.
 
-### Reference-guided consensus for mRNA isoform analysis (`modules/clfr/consensus_fasta/`)
+### Reference-guided consensus for mRNA isoform analysis 
+(`modules/clfr/consensus_fasta/`)
 
 When a reference is available (e.g. a known species or transcriptome), `consensus_fasta.py` builds a per-UMI consensus by aligning each fragment's reads to the reference and calling a position-level pileup consensus (via `samtools consensus`), instead of assembling from scratch (Released standalone as [consensus_fasta](https://github.com/Complete-Genomics/cLFR_Release)):
 
@@ -28,9 +30,7 @@ When a reference is available (e.g. a known species or transcriptome), `consensu
 - **Still preserves real SNVs relative to the reference** — the consensus is called from each fragment's own read pileup, not substituted with reference sequence, so sample-specific variants aren't silently lost.
 
 
-## Directory Structure
-
-The pipeline refactored [CGI_WGS_pipeline](https://github.com/Complete-Genomics/CGI_WGS_Pipeline), expanding scope of the stLFR data, while supporting newly developed cLFR data.  
+## Directory Structure  
 
 ```
 CGI_LFR_pipeline/
