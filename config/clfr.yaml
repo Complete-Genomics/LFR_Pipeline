@@ -184,6 +184,12 @@ frag_de_novo:
     #   balanced   keeps  84%,  mean 95.8 -- default, general profiling
     #   strict     keeps  23%,  mean 97.1 -- depositing sequences / phylogenetics
     qc_preset: auto
+    # Compare reads/UMI and read-length distributions with the shipped Zymo
+    # baseline. `auto` salvages SE data only when both have large adverse drift
+    # and retained depth is safe; PE is report-only until pair-aware filtering.
+    noisy_preprocess: auto
+    noisy_min_read_length: 300
+    noisy_max_reads_per_umi: 300
     assembly_N_umi:      # empty = denovo all UMIs; set an int to cap for debug/smoke test
 
 umi:

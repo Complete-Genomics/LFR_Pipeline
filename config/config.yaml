@@ -182,6 +182,10 @@ frag_de_novo:
     adapter_seq: "CTCAGCAGAGGG"
     min_ctg_len: 400
     num_processes: 20
+    # Zymo-relative SE gate; PE remains report-only until pair-aware filtering.
+    noisy_preprocess: auto
+    noisy_min_read_length: 300
+    noisy_max_reads_per_umi: 300
 
 umi:
     umi_pos_strand_batch: ""

@@ -128,3 +128,82 @@ rule reformat_fasta2:
         awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
         LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
         """
+
+
+## Zymo-relative sample gate for the hs1-like "depth inflated by short reads"
+## failure mode (denovo.md sec 78).  Both depth and read-length distributions
+## must have large adverse drift, and projected retained depth must be safe,
+## before `auto` applies max_reads_per_umi=300 + read length >=300.  Automatic
+## filtering is SE-only; PE remains report-only until pair-aware salvage exists.
+checkpoint noisyPreprocessQC:
+    input:
+        reads="denovo/data_R2_sorted.tsv",
+        depth_baseline=(config['params']['src_dir'] +
+                        "/modules/clfr/denovo/models/" +
+                        "zymo_reads_per_umi_distribution.tsv"),
+        length_baseline=(config['params']['src_dir'] +
+                         "/modules/clfr/denovo/models/" +
+                         "zymo_read_length_distribution.tsv")
+    output:
+        "denovo/noisy_preprocess_decision.tsv"
+    benchmark:
+        "Benchmarks/denovo.noisyPreprocessQC.txt"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        mode = config['frag_de_novo'].get('noisy_preprocess', 'auto'),
+        sequence_type = config['params']['sequence_type'].lower(),
+        min_read_length = config['frag_de_novo'].get(
+            'noisy_min_read_length', 300),
+        max_reads_per_umi = config['frag_de_novo'].get(
+            'noisy_max_reads_per_umi', 300)
+    run:
+        mode = str(params.mode).strip().lower()
+        if mode not in ('off', 'report', 'auto'):
+            raise ValueError(
+                "frag_de_novo.noisy_preprocess={!r}; expected 'off', "
+                "'report', or 'auto'".format(params.mode))
+        if mode == 'auto' and params.sequence_type != 'se':
+            print("noisy preprocess: PE auto salvage is not pair-aware; "
+                  "running report-only and preserving reads")
+            mode = 'report'
+        params.effective_mode = mode
+        shell(
+            "{params.python} "
+            "{params.src_dir}/modules/clfr/denovo/denovo_noisy_preprocess_qc.py "
+            "--r2 {input.reads} --r2-format tsv "
+            "--depth-baseline {input.depth_baseline} "
+            "--read-length-baseline {input.length_baseline} "
+            "--mode {params.effective_mode} "
+            "--min-read-length {params.min_read_length} "
+            "--max-reads-per-umi {params.max_reads_per_umi} "
+            "--out {output}"
+        )
+
+
+def noisy_preprocess_reads(wildcards):
+    decision_path = checkpoints.noisyPreprocessQC.get().output[0]
+    with open(decision_path) as report:
+        decision = dict(line.rstrip("\n").split("\t", 1)
+                        for line in report if "\t" in line)
+    if decision.get('action') == 'salvage':
+        return "denovo/data_R2_salvaged.tsv"
+    return "denovo/data_R2_sorted.tsv"
+
+
+## This rule enters the DAG only when the checkpoint selected salvage. Healthy
+## samples return data_R2_sorted.tsv directly, with no copy and no extra I/O.
+rule applyNoisyPreprocess:
+    input:
+        reads="denovo/data_R2_sorted.tsv",
+        decision="denovo/noisy_preprocess_decision.tsv"
+    output:
+        "denovo/data_R2_salvaged.tsv"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir']
+    shell:
+        "{params.python} "
+        "{params.src_dir}/modules/clfr/denovo/denovo_noisy_preprocess_qc.py "
+        "--r2 {input.reads} --r2-format tsv "
+        "--apply-decision {input.decision} --reads-out {output}"
