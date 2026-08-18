@@ -126,7 +126,7 @@ rule fasta_frag_len_distribution_consensus:
     input:
         "consensus/consensus.fasta"
     output:
-        "consensus/consensus_frag_length_distribution.pdf",
+        "consensus/consensus_frag_length_distribution.png",
         # "Align/frag_length_distribution.txt"
     params:
         python = config['params']['general_python'],

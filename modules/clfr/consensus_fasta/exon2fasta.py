@@ -2,7 +2,7 @@
 all functions used for 16s analysis, including frag denovo
 output: 
 summary stats
-denovo_frag_length_distribution.pdf
+denovo_frag_length_distribution.png
 """
 from pathlib import Path
 import pandas as pd
@@ -616,14 +616,11 @@ def metrics_basic(fasta, outdir, cutoff, name):
             f.write(f'min={min(assembly_len)}, max={max(assembly_len)}\n')
     except Exception as e: print(e)
     
-    # Plot fragment length distribution without depending on seaborn runtime APIs.
-    plt.figure(figsize=(15, 8))
-    plt.hist(assembly_len_filtered, bins=50)
-    plt.grid(axis="y", alpha=0.3)
+    sns.set(rc={'figure.figsize': (15, 8)})
+    sns.set_style("whitegrid")
+    sns.distplot(assembly_len_filtered, bins=50, kde=True)
     plt.title(f"{name}_frag_length_distribution_N{cutoff}")
-    plt.xlabel("Fragment length")
-    plt.ylabel("Count")
-    plt.savefig( f"{outdir}/{name}_frag_length_distribution.pdf")
+    plt.savefig( f"{outdir}/{name}_frag_length_distribution.png")
     plt.clf()
     # print(f'count {len(assembly_len)} frag')
     # print(f'mean={round(mean(assembly_len),4)}, median={median(assembly_len)}')
@@ -756,4 +753,3 @@ if __name__ == "__main__":
         run_per_base_density_bc(chrom, bc)
     else:
         print('no module')
-
