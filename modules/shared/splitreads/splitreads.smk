@@ -342,7 +342,7 @@ rule trim_reads:
         if [[ "{params.sequence_type}" == "pe" ]]; then
             {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl $ADAPTER_ARGS
         elif [[ "{params.sequence_type}" == "se" ]]; then
-            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
+            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl maxns=0 $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;
