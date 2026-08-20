@@ -32,6 +32,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--num_processes", type=int, required=False)
 parser.add_argument("--bc_list", type=str, required=False)
 parser.add_argument("--sequence_type", type=str, required=False)
+parser.add_argument("--r1", type=str, default="denovo/data_R1_sorted.tsv")
+parser.add_argument("--r2", type=str, default="denovo/data_R2_sorted.tsv")
 parser.add_argument("--k_min", type=int, required=False)
 parser.add_argument("--k_max", type=int, required=False)
 parser.add_argument("--min_ctg_len", type=int, required=False)
@@ -58,6 +60,8 @@ num_processes = args.num_processes
 # bc with >50 reads
 bc_list = args.bc_list
 sequence_type = args.sequence_type
+R1_PATH = args.r1
+R2_PATH = args.r2
 K_MIN = args.k_min
 K_MAX = args.k_max
 MIN_CTG_LEN = args.min_ctg_len
@@ -301,11 +305,11 @@ def denovo_pe(n_line_chunk, start_idx):
     meta_data2 = defaultdict(list)
 
     ## load reads to mem to speedup, *sgrep.tsv with diff len after trim, unable to use seek to get idx
-    with open(f'denovo/{NAME}1_sgrep.tsv', 'r') as f:
+    with open(R1_PATH, 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
             add_sgrep_line(meta_data1, line)
 
-    with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
+    with open(R2_PATH, 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
             add_sgrep_line(meta_data2, line)
 
@@ -316,7 +320,7 @@ def denovo_se(n_line_chunk, start_idx):
     meta_data2 = defaultdict(list)
 
     ## load reads to mem to speedup, *sgrep.tsv with diff len after trim, unable to use seek to get idx
-    with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
+    with open(R2_PATH, 'r') as f:
         for line in itertools.islice(f, start_idx, start_idx+n_line_chunk):
             add_sgrep_line(meta_data2, line)
 
@@ -324,7 +328,7 @@ def denovo_se(n_line_chunk, start_idx):
 
 
 def iter_denovo_se_chunks(start_idx, n_line_chunk):
-    with open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f:
+    with open(R2_PATH, 'r') as f:
         for _ in itertools.islice(f, start_idx):
             pass
         chunk_start = start_idx
@@ -341,7 +345,7 @@ def iter_denovo_se_chunks(start_idx, n_line_chunk):
 
 
 def iter_denovo_pe_chunks(start_idx, n_line_chunk):
-    with open(f'denovo/{NAME}1_sgrep.tsv', 'r') as f1, open(f'denovo/{NAME}2_sgrep.tsv', 'r') as f2:
+    with open(R1_PATH, 'r') as f1, open(R2_PATH, 'r') as f2:
         for _ in itertools.islice(f1, start_idx):
             pass
         for _ in itertools.islice(f2, start_idx):
@@ -387,8 +391,7 @@ def create_bins(start_idx, end_idx, bin_size):
     return bins
 
 def count_sgrep_lines():
-    file_path = f'denovo/{NAME}2_sgrep.tsv'
-    with open(file_path, 'r') as f:
+    with open(R2_PATH, 'r') as f:
         return sum(1 for _ in f)
 
 def parse_bc_fasta(in_fasta):
@@ -472,8 +475,7 @@ if __name__ == "__main__":
 
     elif module == 'create_cmd':
         # create command to split across nodes
-        file_path = f'denovo/{NAME}2_sgrep.tsv'
-        read_fraction_of_file(file_path, num_node)
+        read_fraction_of_file(R2_PATH, num_node)
 
     elif module =='parse_bc_fasta':
         n_bc = 1000

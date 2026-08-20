@@ -20,8 +20,9 @@ def count_fq_len():
 
 rule run_denovo_parallel:
     input:
-        "denovo/data_R1_sorted.tsv",
-        "denovo/data_R2_sorted.tsv"
+        r1="denovo/data_R1_sorted.tsv",
+        r2=noisy_preprocess_reads,
+        noisy_qc="denovo/noisy_preprocess_decision.tsv"
     output:
         "denovo/frag_denovo_done"
     params:
@@ -48,6 +49,8 @@ rule run_denovo_parallel:
                    "{params.src_dir}/modules/clfr/denovo/denovo_clfr_ram.py",
                    "--num_processes {params.num_processes} ",
                    "--sequence_type {params.sequence_type} ",
+                   "--r1 {input.r1} ",
+                   "--r2 {input.r2} ",
                    "--n_line_chunk 2000000 ",
                    "--start_idx {params.start_idx} ",
                    "--module denovo_parallel ",
