@@ -162,7 +162,7 @@ calc_frag:
 frag_de_novo:
     ## olc or megahit
     assembler: olc   # megahit | olc (pure-Python OLC, no subprocess fork)
-    assembly_N_umi: 1000    # empty = denovo all UMIs; set an int to cap for debug/smoke test
+    assembly_N_umi: 3000    # shadow/smoke cap; empty = denovo all UMIs
     run_parallel: False
     reads_per_BC: 50
     margin: 5

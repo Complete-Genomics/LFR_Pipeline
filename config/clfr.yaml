@@ -190,7 +190,11 @@ frag_de_novo:
     noisy_preprocess: auto
     noisy_min_read_length: 300
     noisy_max_reads_per_umi: 300
-    assembly_N_umi:      # empty = denovo all UMIs; set an int to cap for debug/smoke test
+    assembly_N_umi: 3000 # shadow/smoke cap; empty = denovo all UMIs
+
+# Standalone QA only; random_inspection.smk does not run in the production DAG.
+random_inspection:
+    max_umis: 3000         # set "all" only for an intentional full-run benchmark
 
 umi:
     umi_pos_strand_batch: ""

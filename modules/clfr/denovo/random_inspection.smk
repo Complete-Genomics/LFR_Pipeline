@@ -16,6 +16,8 @@
 # Config (under `random_inspection:`):
 #   input_fastq      barcode-tagged FASTQ(.gz), e.g. data/split_read_2_trimmed.fastq.gz
 #   outdir           default "random_inspection"
+#   max_umis         default 3000; barcode-sorted input cap shared by all arms.
+#                    Set "all" only for an intentional full-run benchmark.
 #   ml_model         default modules/clfr/denovo/models/model_identity.lgb
 #   greengenes_db    default modules/clfr/denovo/db/gg.fna (NOT shipped -- see db/README.md)
 #   vsearch, samtools  binary paths, default to PATH lookup
@@ -44,6 +46,11 @@ RI_NPROC = RI.get('num_processes', 4)
 RI_VSEARCH_ID = RI.get('vsearch_id', 0.75)
 RI_CHIMERA_REFERENCE = RI.get('chimera_reference', '')
 RI_CHIMERA_LABEL_SEPARATOR = RI.get('chimera_label_separator', '_16S')
+RI_MAX_UMIS = RI.get('max_umis', 3000)
+if RI_MAX_UMIS not in (None, "", "all"):
+    RI_MAX_UMIS = int(RI_MAX_UMIS)
+    if RI_MAX_UMIS < 1:
+        raise ValueError("random_inspection.max_umis must be a positive integer or 'all'")
 
 wildcard_constraints:
     arm = "nofilter|plain|ml"
@@ -83,9 +90,39 @@ rule sortFastq_inspect:
         "bash {RI_SRC}/denovo_sort_fastq.sh {input} {output} {RI_NPROC} {RI_SAMTOOLS}"
 
 
-rule extractFeatures_inspect:
+## Cap after barcode sort, before feature extraction and all three arms.  This
+## keeps the denominator and the exact UMI cohort identical across nofilter,
+## plain, and ML, while avoiding a full-data assembly/reference comparison.
+rule capUmis_inspect:
     input:
         f"{RI_OUT}/sorted.fastq.gz"
+    output:
+        f"{RI_OUT}/subset.fastq.gz"
+    params:
+        max_umis=RI_MAX_UMIS
+    shell:
+        """
+        if [ "{params.max_umis}" = "all" ] || [ -z "{params.max_umis}" ]; then
+            cp {input} {output}
+        else
+            gzip -dc {input} | awk -v max_umis={params.max_umis} '
+                NR % 4 == 1 {{
+                    barcode = $2
+                    if (barcode != previous) {{
+                        previous = barcode
+                        seen++
+                    }}
+                    if (seen > max_umis) exit
+                }}
+                {{ print }}
+            ' | gzip -c > {output}
+        fi
+        """
+
+
+rule extractFeatures_inspect:
+    input:
+        f"{RI_OUT}/subset.fastq.gz"
     output:
         f"{RI_OUT}/features.tsv"
     benchmark:
@@ -101,7 +138,7 @@ rule extractFeatures_inspect:
 ## being compared" requirement).
 rule buildSgrep_inspect:
     input:
-        f"{RI_OUT}/sorted.fastq.gz"
+        f"{RI_OUT}/subset.fastq.gz"
     output:
         f"{RI_OUT}/nofilter.tsv"
     shell:

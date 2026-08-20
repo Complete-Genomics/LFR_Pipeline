@@ -67,7 +67,7 @@ rule filter_reads1:
     run:
         if config['params']['sequence_type'].lower()=='pe':
             params.nth_line = count_lines()
-            shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(zcat {input.read}) | {params.bgzip} -c > {output} ")
+            shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(gzip -dc {input.read}) | {params.bgzip} -c > {output} ")
         elif config['params']['sequence_type'].lower()=='se':
             shell("touch denovo/data_R1_filtered.fastq.gz")
 
@@ -84,7 +84,7 @@ rule filter_reads2:
         bgzip = config['params']['bgzip'],
     run:
         params.nth_line = count_lines()
-        shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(zcat {input.read}) | {params.bgzip} -c > {output} ")
+        shell("awk -F '\t' -v OFS='\t' 'FNR == NR{{a[$1]++; next}} {{if (NR % 4 == {params.nth_line} ) {{ok=0; if($2 in a) ok = 1}}; if (ok == 1) print $0}}' {input.barcode_freq} <(gzip -dc {input.read}) | {params.bgzip} -c > {output} ")
 
 
 rule reformat_fasta1:
@@ -102,7 +102,7 @@ rule reformat_fasta1:
         """
         mkdir -p {params.sort_tmp_dir}
         if [[ "{params.sequence_type}" == "pe" ]]; then
-            zcat {input} | \
+            gzip -dc {input} | \
             awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
             awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
             LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
@@ -127,7 +127,7 @@ rule reformat_fasta2:
     shell:
         """
         mkdir -p {params.sort_tmp_dir}
-        zcat {input} | \
+        gzip -dc {input} | \
         awk '{{if (NR%4==1) {{temp=$1; $1=$2; $2=temp}} }}1' | \
         awk '{{if (NR%4==1) line=line$0"\\t"; if (NR%4==2) {{print line$0; line=""}}}}' | \
         LC_ALL=C sort -T {params.sort_tmp_dir} -S {params.sort_mem} > {output}
