@@ -183,11 +183,14 @@ def qc_setting(key):
 
 ## --- Learned read-quality score (denovo.md sec 51/59/62-67): validated as a
 ## conflict-graph tie-break (mean identity +0.03..+0.07 vs the plain filter,
-## significant across 4 independent samples + a 10k-UMI scale check), but NOT
-## yet wired into the default DAG above -- readFilter_olc still calls the
-## plain denovo_read_filter.py. These two rules exist so the sort and feature
-## steps can be benchmarked and validated on real runs before that switch is
-## made; nothing downstream depends on their output yet.
+## significant across 4 independent samples + a 10k-UMI scale check).
+## denovo_read_filter.py now has the --ml-model/--ml-features code path
+## (previously only exercised as one-off analysis scripts, never as a
+## reusable pipeline rule); readFilter_olc below wires it in as an opt-in
+## config switch (frag_de_novo.read_filter_ml_model), NOT a new default --
+## the reproduced model (subprojects/olc/mlpf/model_identity.lgb, since the
+## original was lost with /tmp) has not yet had its own downstream assembly
+## validation redone, so the default DAG is unchanged until that happens.
 ##
 ## sortFastq_olc keeps quality, which reformat_fasta2 (rule above) discards --
 ## the score model needs 5 quality-derived features reformat_fasta2's TSV
@@ -230,7 +233,7 @@ rule extractReadFeatures_olc:
 
 rule readFilterProbe_olc:
     input:
-        "denovo/data_R2_sorted.tsv"
+        noisy_preprocess_reads
     output:
         "denovo/read_filter_probe.tsv"
     benchmark:
@@ -257,8 +260,11 @@ rule readFilterProbe_olc:
 
 rule readFilter_olc:
     input:
-        reads="denovo/data_R2_sorted.tsv",
-        probe="denovo/read_filter_probe.tsv"
+        reads=noisy_preprocess_reads,
+        probe="denovo/read_filter_probe.tsv",
+        noisy_qc="denovo/noisy_preprocess_decision.tsv",
+        features=("denovo/read_features.tsv"
+                  if config['frag_de_novo'].get('read_filter_ml_model') else [])
     output:
         reads="denovo/data_R2_readfilt.tsv",
         dropped="denovo/data_R2_readfilt.dropped.tsv",
@@ -272,7 +278,8 @@ rule readFilter_olc:
         num_processes = config['frag_de_novo']['num_processes'],
         same_molecule_id = config['frag_de_novo'].get('read_filter_identity', 0.90),
         run_parallel = config['frag_de_novo'].get('run_parallel', False),
-        enabled = qc_setting('read_filter')
+        enabled = qc_setting('read_filter'),
+        ml_model = config['frag_de_novo'].get('read_filter_ml_model', '')
     run:
         preset_name, qc = resolve_qc(input.probe)
         enabled = qc["read_filter"]
@@ -308,6 +315,9 @@ rule readFilter_olc:
                     "--out {output.reads}",
                     "--dropped-out {output.dropped}",
                     "--report {output.report}"]
+        if params.ml_model:
+            command += ["--ml-model {params.ml_model}",
+                        "--ml-features denovo/read_features.tsv"]
         shell(" ".join(command))
 
 
@@ -461,7 +471,7 @@ rule plotOLC_frag_len_distribution:
 ## and did not survive validation (denovo.md sec 30).
 rule libraryQC_olc:
     input:
-        "denovo/data_R2_sorted.tsv"
+        noisy_preprocess_reads
     output:
         "denovo/library_qc.tsv"
     params:
@@ -488,10 +498,19 @@ rule libraryQC_olc:
 ## This is the one that actually discriminates: on the ZymoBIOMICS control it
 ## reaches AUC 0.827, where plain read-back QC and reference-free uchime_denovo
 ## were both at chance (denovo.md sec 30/31).
+##
+## r2 MUST be the pre-read_filter pool, not data_R2_readfilt.tsv: the 0.827
+## AUC / max_span_ratio=0.25 default were both calibrated on the raw pool
+## (denovo.md sec 91), and re-measuring on the filtered pool is not merely a
+## different operating point -- it is a strictly worse one (AUC 0.827->0.771,
+## clean-contig false-flag rate 14.2%->17.4%, kept yield 73.5%->71.1%, kept
+## mean identity 95.35->95.22), because read_filter drops indel-rich reads
+## unevenly and can hollow out the one true-molecule contig's already-thin
+## local coverage into a spurious spanning-depth dip.
 rule junctionQC_olc:
     input:
         contigs="denovo/denovo.longest.fasta",
-        r2="denovo/data_R2_readfilt.tsv",
+        r2=noisy_preprocess_reads,
         probe="denovo/read_filter_probe.tsv"
     output:
         "denovo/junction_qc.tsv"

@@ -153,6 +153,8 @@ _CFG = {
     "max_contigs":          8,     # maximum final contigs emitted per UMI
     "use_minimizer_dedup":  False,  # collapse near-identical reads before assembly -- OFF: confirmed conserved-motif collision bug, see _canonical_minimizer
     "use_cross_attempt_evidence": True,  # collective rescue may vote using reads already consumed by earlier raw-building attempts, not just the current attempt's leftovers -- see assemble_umi docstring for the isolation A/B this default is pending on
+    "min_join_support": 1,  # verified raw reads required across a newly created join; 1 preserves legacy assembly
+    "join_trace": None,  # path to write a per-join TSV (see _write_join_trace) -- None (default) disables ALL join-level bookkeeping/bridge-support computation, so a barcode run with this off pays zero cost and produces byte-identical assembly output to before this instrumentation existed. Explicit opt-IN only (CLI --join-trace PATH), matching this file's existing convention (see _configure_from_args's docstring for why opt-OUT flags have twice caused a silent-default production incident here) -- pure observation, never feeds back into any join/extension decision.
 }
 
 
@@ -162,8 +164,11 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
               polish_kmer_step=5, use_internal_anchor=True, internal_min_verify=60,
               max_contigs=8, use_minimizer_dedup=False,
               use_cross_attempt_evidence=True, adaptive_seed_k=False,
-              fallback_seed_k=10, seed_k=10):
+              fallback_seed_k=10, seed_k=10, min_join_support=1,
+              join_trace=None):
     """Call once in the parent process before spawning Pool workers."""
+    if min_join_support < 1:
+        raise ValueError("min_join_support must be >= 1")
     _CFG["min_ctg"]   = min_ctg_len
     _CFG["min_ov"]    = min_overlap
     _CFG["max_mm"]    = max_mismatch
@@ -182,6 +187,8 @@ def configure(min_ctg_len=400, min_overlap=20, max_mismatch=0.05,
     _CFG["use_cross_attempt_evidence"] = use_cross_attempt_evidence
     _CFG["adaptive_seed_k"] = adaptive_seed_k
     _CFG["fallback_seed_k"] = fallback_seed_k
+    _CFG["min_join_support"] = min_join_support
+    _CFG["join_trace"] = join_trace
 
 
 # ── sequence utilities ────────────────────────────────────────────────────────
@@ -597,6 +604,381 @@ def _collective_anchor_extend(contig, pool, anchor_index, candidate_set,
     return "".join(assembled), used
 
 
+# ── join-level spanning-guard instrumentation (P1: observation only) ──────────
+#
+# Everything below exists to answer one question -- is denovo_junction_qc.py's
+# validated post-assembly chimera signal (AUC 0.827: at a real chimera
+# junction no genuine read spans it with real margin AND real two-sided
+# identity, because no physical molecule contains both sides) ALSO available
+# at join time, so a future guard could refuse a chimeric join instead of
+# discarding the whole contig afterwards. P1 only measures it -- every
+# function here is reachable only when join_map is not None (CLI
+# --join-trace / configure(join_trace=...)), which is None/off by default,
+# so none of this changes a single assembly decision.
+#
+# CRITICAL prior failure this must not repeat: an earlier spanning check
+# required only that a read PLACE across a position, with no identity check,
+# and scored AUC ~= 0.5 -- 16S conserved regions let a read from species A
+# anchor onto species B's sequence and appear to span. The two-sided local
+# identity test in _bridge_support_at is what makes the signal real; do not
+# simplify it away.
+
+_BRIDGE_MARGIN = 30
+_BRIDGE_MIN_SIDE_IDENTITY = 0.95
+_BRIDGE_WINDOW = 100
+# Placement k/thresholds mirror denovo_junction_qc.py / analyze_olc_shortfall.py's
+# place()/place_either() exactly (k=17, >=3 anchors spanning >=40bp, hit fan-out
+# capped at 12, ambiguous top-2 placements rejected) -- reimplemented locally
+# rather than imported (denovo_junction_qc.py reaches its placement helpers via
+# a sys.path insert into this package's own test/ directory, which is fine for
+# an offline QC script but not a dependency this production assembler should
+# carry) rather than copied verbatim.
+_BRIDGE_ANCHOR_K = 17
+_BRIDGE_MIN_ANCHORS = 3
+_BRIDGE_MIN_SPAN = 40
+_BRIDGE_MAX_KMER_HITS = 12
+
+
+def _jt_kmer_index(seq, k):
+    index = defaultdict(list)
+    for pos in range(len(seq) - k + 1):
+        index[seq[pos:pos + k]].append(pos)
+    return index
+
+
+def _jt_place(query, target, target_index, k=_BRIDGE_ANCHOR_K,
+              min_anchors=_BRIDGE_MIN_ANCHORS, min_span=_BRIDGE_MIN_SPAN):
+    """Mirrors analyze_olc_shortfall.place(): ungapped placement of `query`
+    on `target` by its longest co-linear set of exact k-mer anchors, None if
+    no single placement dominates (ties on (anchor_count, span) are treated
+    as ambiguous, not guessed at)."""
+    offsets = defaultdict(list)
+    for qpos in range(len(query) - k + 1):
+        hits = target_index.get(query[qpos:qpos + k], ())
+        if len(hits) > _BRIDGE_MAX_KMER_HITS:
+            continue
+        for tpos in hits:
+            offsets[tpos - qpos].append(qpos)
+    candidates = []
+    for offset, positions in offsets.items():
+        unique = sorted(set(positions))
+        if len(unique) >= min_anchors and unique[-1] - unique[0] >= min_span:
+            candidates.append((len(unique), unique[-1] - unique[0], offset))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    best = candidates[0]
+    if len(candidates) > 1 and candidates[1][:2] == best[:2]:
+        return None
+    _anchors, _span, start = best
+    return start, start + len(query)
+
+
+def _jt_place_oriented(read, contig, index):
+    """Mirrors denovo_junction_qc.place_oriented(): try both orientations,
+    require exactly one to place unambiguously."""
+    hits = []
+    for oriented in (read, rc(read)):
+        result = _jt_place(oriented, contig, index)
+        if result is not None:
+            hits.append((result, oriented))
+    if len(hits) != 1:
+        return None
+    (start, end), oriented = hits[0]
+    return start, end, oriented
+
+
+def _bridge_support_at(contig, junction_pos, evidence_reads,
+                        margin=_BRIDGE_MARGIN,
+                        min_side_identity=_BRIDGE_MIN_SIDE_IDENTITY,
+                        window=_BRIDGE_WINDOW):
+    """Count of evidence_reads that verifiably bridge contig[junction_pos]:
+    placed (both orientations tried, exactly one unambiguous placement),
+    extending >= margin bp past junction_pos on BOTH sides, AND scoring
+    >= min_side_identity on a local `window`-bp match profile on each side
+    (a windowed test, not whole-side, since placement is ungapped -- a single
+    indel anywhere would frameshift and wreck whole-side identity even for an
+    otherwise-good read; see denovo_junction_qc.spanning_profile).
+
+    evidence_reads should be the WHOLE UMI read pool (reads already consumed
+    by earlier greedy attempts AND still-unused ones) -- a read that could
+    bridge a junction has often already been consumed by an earlier boundary
+    merge, or rejected there by the pairwise mismatch budget the collective
+    rescue exists to work around; restricting evidence to only-unused reads
+    would systematically undercount true bridging support.
+
+    This is denovo_junction_qc.spanning_profile specialized to ONE position
+    instead of a full per-position profile (this is a per-join query, not a
+    whole-contig scan), reimplemented locally -- see the module-level note
+    above this function for why not imported.
+    """
+    n = len(contig)
+    if n == 0 or not evidence_reads:
+        return 0
+    index = _jt_kmer_index(contig, _BRIDGE_ANCHOR_K)
+    count = 0
+    for read in set(evidence_reads):
+        hit = _jt_place_oriented(read, contig, index)
+        if hit is None:
+            continue
+        start, end, oriented = hit
+        lo, hi = max(0, start), min(n, end)
+        if lo >= hi:
+            continue
+        if not (lo + margin <= junction_pos < hi - margin):
+            continue
+        matches = [1 if oriented[pos - start] == contig[pos] else 0
+                   for pos in range(lo, hi)]
+        k = junction_pos - lo
+        m_len = len(matches)
+        l_start = max(0, k - window)
+        r_end = min(m_len, k + window)
+        l_len, r_len = k - l_start, r_end - k
+        if l_len < margin or r_len < margin:
+            continue
+        left_id = sum(matches[l_start:k]) / l_len
+        right_id = sum(matches[k:r_end]) / r_len
+        if left_id >= min_side_identity and right_id >= min_side_identity:
+            count += 1
+    return count
+
+
+_JUNCTION_CONTEXT_HALF = 20
+
+
+def _junction_context(contig, pos, half=_JUNCTION_CONTEXT_HALF):
+    """(lo, context): 40bp sequence context centered on `pos`, captured once
+    at join time so _write_join_trace can independently verify the position
+    bookkeeping below by re-locating this exact substring in the final
+    emitted contig. `lo` (the context's own start offset) is returned
+    alongside the string and must be carried -- and shifted in lockstep with
+    `pos` -- through every later join this junction survives: near a
+    contig's own edge the window is clamped asymmetrically (e.g. pos=4 with
+    half=20 clamps lo to 0, not pos-20=-16), and re-deriving lo from a LATER,
+    already-shifted pos via the same max(0, pos-half) formula silently gives
+    the wrong answer whenever that original clamp fired -- confirmed on real
+    16S data: a junction captured near a short draft's edge, then shifted by
+    a later collective-rescue prepend, validated against the wrong position
+    when lo was recomputed instead of shifted alongside pos."""
+    lo = max(0, pos - half)
+    hi = min(len(contig), pos + half)
+    return lo, contig[lo:hi]
+
+
+def _flip_junctions(junctions, length):
+    """Remap junction records recorded against a pool entry's forward
+    orientation onto its reverse-complement of the given `length`: a cut
+    just before forward position p sits just after reverse position
+    length - p. The frozen context snippet is describing physical bases,
+    not a coordinate, so it must itself be reverse-complemented -- and its
+    own `lo` recomputed from where THAT flipped snippet starts -- to still
+    be a valid re-locatable substring of the RC-oriented sequence."""
+    out = []
+    for j in junctions:
+        ctx = j.get("context", "")
+        if ctx:
+            new_ctx = rc(ctx)
+            new_lo = length - (j["lo"] + len(ctx))
+        else:
+            new_ctx = ctx
+            new_lo = length - j["pos"]
+        out.append(dict(j, pos=length - j["pos"], lo=new_lo, context=new_ctx))
+    return out
+
+
+def _context_survives(j, keep_from, keep_to):
+    """True iff a junction's ALREADY-CAPTURED context window (tracked via
+    its own `lo` field, not re-derived from `pos` -- see _junction_context)
+    lies entirely within [keep_from, keep_to) of a join that keeps only that
+    sub-range of the source it was captured against. Checking just the
+    junction's single position against the keep range is not enough: a
+    later truncating join can keep a junction's position while overwriting
+    content next to it that its frozen context snippet still depends on,
+    silently invalidating that snippet without moving the position at all."""
+    return j["lo"] >= keep_from and j["lo"] + len(j["context"]) <= keep_to
+
+
+def _diff_join_geometry(old_contig, new_contig):
+    """
+    Reverse-engineer a join's position-bookkeeping shape purely from the
+    contig strings before/after the join, so junction tracing never needs
+    internal offsets threaded back out of suffix_prefix_overlap's or
+    internal_anchor_extend_indexed's existing return contracts (both
+    2-tuples, both exercised by test_denovo_seed_olc.py -- changing their
+    arity is exactly the kind of "harmless" change this file's history
+    warns against). Every join site handled this way has one of two shapes:
+
+    - the old contig survives completely, as a prefix (boundary 3' /
+      internal-anchor forward-3') or a suffix (boundary 5' / forward-5') of
+      the new one -- "which end grew" is directly len(new) - len(old).
+    - only a prefix or suffix of the old contig survives, the rest replaced
+      by a candidate's own content (internal-anchor's reverse-3'/reverse-5'
+      variants, which trust a candidate over a noisy contig edge -- see
+      internal_anchor_extend_indexed's docstring). Detected via longest
+      common prefix/suffix between old and new.
+
+    Collective rescue is handled separately at its call site (it can extend
+    both ends in one call, which this two-shape model does not cover).
+
+    Returns dict(kind, new_junction_pos, keep_from, keep_to, shift):
+    an existing junction at old-contig position p survives iff
+    keep_from <= p <= keep_to, and maps to p + shift in the new contig.
+    """
+    if new_contig.startswith(old_contig):
+        return {"kind": "append", "new_junction_pos": len(old_contig),
+                "keep_from": 0, "keep_to": len(old_contig), "shift": 0}
+    if new_contig.endswith(old_contig):
+        shift = len(new_contig) - len(old_contig)
+        return {"kind": "prepend", "new_junction_pos": shift,
+                "keep_from": 0, "keep_to": len(old_contig), "shift": shift}
+
+    max_cp = min(len(old_contig), len(new_contig))
+    cp = 0
+    while cp < max_cp and old_contig[cp] == new_contig[cp]:
+        cp += 1
+    cs = 0
+    while cs < max_cp - cp and old_contig[-1 - cs] == new_contig[-1 - cs]:
+        cs += 1
+    if cp >= cs:
+        return {"kind": "truncate_tail", "new_junction_pos": cp,
+                "keep_from": 0, "keep_to": cp, "shift": 0}
+    drop_before = len(old_contig) - cs
+    shift = len(new_contig) - cs - drop_before
+    return {"kind": "truncate_head", "new_junction_pos": drop_before + shift,
+            "keep_from": drop_before, "keep_to": len(old_contig), "shift": shift}
+
+
+def _apply_join_shift(junctions, geometry):
+    out = []
+    for j in junctions:
+        if _context_survives(j, geometry["keep_from"], geometry["keep_to"]):
+            shift = geometry["shift"]
+            out.append(dict(j, pos=j["pos"] + shift, lo=j["lo"] + shift))
+    return out
+
+
+def _candidate_junction_carry(new_contig, geometry, cand_fwd, cand_rc, join_map):
+    """Best-effort: detect which orientation of a pool candidate contributed
+    a join's new territory and remap that candidate's OWN inherited
+    junctions (site-4 contig-merge only -- join_map has no entries for raw
+    reads) into new_contig's frame. Detection is by exact substring match
+    (the new territory must literally be a suffix/prefix of the candidate in
+    one orientation); if neither orientation matches -- should not happen
+    given how these joins are constructed, but this is trace bookkeeping,
+    not an assembly decision -- carry-over is silently skipped rather than
+    guessed at. See _context_survives for why a candidate junction's whole
+    context window, not just its position, must fall inside the retained
+    sub-range."""
+    pos = geometry["new_junction_pos"]
+    if geometry["kind"] in ("append", "truncate_tail"):
+        territory = new_contig[pos:]
+        for cand, is_rc in ((cand_fwd, False), (cand_rc, True)):
+            if territory and cand.endswith(territory):
+                inherited = join_map.get(cand_fwd, [])
+                if is_rc:
+                    inherited = _flip_junctions(inherited, len(cand_fwd))
+                local_start = len(cand) - len(territory)
+                shift = pos - local_start
+                return [dict(j, pos=j["pos"] + shift, lo=j["lo"] + shift)
+                        for j in inherited
+                        if _context_survives(j, local_start, len(cand))]
+        return []
+    else:
+        territory = new_contig[:pos]
+        for cand, is_rc in ((cand_fwd, False), (cand_rc, True)):
+            if territory and cand.startswith(territory):
+                inherited = join_map.get(cand_fwd, [])
+                if is_rc:
+                    inherited = _flip_junctions(inherited, len(cand_fwd))
+                return [dict(j) for j in inherited
+                        if _context_survives(j, 0, len(territory))]
+        return []
+
+
+def _make_junction(contig, pos, join_type, ov_len, evidence_reads):
+    """Build one junction record, computing its verified bridge-support
+    count AT JOIN TIME against `contig` -- the draft as it exists right
+    after this specific join, not any later, further-extended state -- plus
+    a 40bp context snippet (and its own start offset `lo`) for the
+    emission-time position-relocation check (see _junction_context).
+
+    Every call site is required to only reach here with a strictly interior
+    position: a junction at or past a contig's own edge can never be
+    genuinely spanned by any read (bridge_reads would be forced to 0
+    regardless of biology, not because no read exists), and one earlier,
+    real bug here (a no-op internal-anchor/boundary "success" -- see
+    _record_join's docstring) produced exactly that. This assertion is the
+    regression guard for that class of bug: it must never fire once every
+    caller correctly skips recording a non-interior position, so it fires
+    loudly (this is diagnostic tracing, --join-trace opt-in only -- never
+    reachable when join_map is None, i.e. never in the default zero-cost
+    path) rather than silently emitting a row that can't mean what its
+    columns claim.
+    """
+    assert 0 < pos < len(contig), (
+        "junction position must be strictly interior: pos=%d contig_len=%d "
+        "join_type=%s" % (pos, len(contig), join_type))
+    bridge = _bridge_support_at(contig, pos, evidence_reads) if evidence_reads else 0
+    lo, context = _junction_context(contig, pos)
+    return {"pos": pos, "lo": lo, "join_type": join_type, "ov_len": ov_len,
+            "bridge_reads": bridge, "context": context}
+
+
+def _has_min_join_support(contig, junction_pos, evidence_reads, min_join_support):
+    """Whether a genuinely new interior join has enough independent support.
+
+    ``_bridge_support_at`` requires a read to place unambiguously and match
+    both sides of the join with real margin; it also de-duplicates identical
+    sequence strings.  Thus a threshold of two means two distinct raw-read
+    sequences, not merely the candidate read plus a duplicated copy.  A
+    contained/redundant candidate creates no new interior join and is safe to
+    consume without this test.
+    """
+    if min_join_support <= 1 or not (0 < junction_pos < len(contig)):
+        return True
+    if evidence_reads is None:
+        raise ValueError("join evidence is required when min_join_support > 1")
+    return (_bridge_support_at(contig, junction_pos, evidence_reads)
+            >= min_join_support)
+
+
+def _record_join(junctions, join_map, old_contig, new_contig, new_pos, carried,
+                  join_type, ov_len, evidence_reads):
+    """Shared tail of every join-recording call site in _extend_one_contig:
+    build the new junction record, append it (plus any carried-over inherited
+    junctions from a candidate that was itself an already-assembled contig)
+    and register the result into join_map under new_contig's own string
+    value so a later call/the caller can look it up by the final returned
+    contig.
+
+    `junctions` must already reflect this join's effect on any PRIOR
+    junctions (shifted/dropped per _diff_join_geometry or the boundary-5p
+    call site's own equivalent maths) -- this function only adds the new
+    junction plus `carried`, it never re-shifts `junctions` itself.
+
+    A join is only recorded as a NEW junction when new_pos is strictly
+    interior (0 < new_pos < len(new_contig)): a boundary/internal-anchor
+    "success" can still contribute zero new territory when the consumed
+    candidate is fully redundant with content already there (verified only
+    via the shared max_mm mismatch BUDGET, not exact-match -- a duplicate
+    read can pass that budget while replacing a stretch with byte-identical
+    or equal-length content). That is correct, harmless assembler behavior
+    -- a redundant read consumed, nothing else changes -- but it is not a
+    join this trace cares about, and recording it anyway would place
+    junction_pos at or past the contig's own edge, where by construction no
+    read can ever bridge it (bridge_reads forced to 0 regardless of
+    biology) and _write_join_trace's own interior-position assertion would
+    reject it. `carried` and any pre-shifted `junctions` are still folded
+    in and registered either way, since a candidate's own content can be
+    genuinely new even when this specific join creates no fresh boundary.
+    """
+    result = list(junctions) + list(carried)
+    if 0 < new_pos < len(new_contig):
+        result.append(_make_junction(new_contig, new_pos, join_type, ov_len, evidence_reads))
+    join_map[new_contig] = result
+    return result
+
+
 def _internal_anchor_extend_3prime_indexed(contig, pool, kmer_index, unused_set,
                                             min_ov, max_mm, seed_k, min_verify,
                                             check_len_override=None):
@@ -929,7 +1311,8 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
                        internal_min_verify=60, kmer_index_holder=None,
                        internal_check_len=None, collective_index_holder=None,
                        collective_evidence_set=None, boundary_index=None,
-                       max_contig_len=None):
+                       max_contig_len=None, join_map=None, join_evidence_reads=None,
+                       is_merge=False, min_join_support=1):
     """
     Build a single greedy-extended contig from the longest still-available
     read in `pool` (a FIXED list of sequences that is never reindexed --
@@ -987,11 +1370,38 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
     same incident had two contigs from barcodes with no detectable string
     corruption), so this is the backstop that doesn't depend on
     recognizing the cause in advance.
+
+    join_map: None (default, zero cost) disables ALL join-level bookkeeping
+    below -- observation only, see the "join-level spanning-guard
+    instrumentation" section above internal_anchor_extend_indexed. When
+    provided, a dict from contig string -> list of junction records valid in
+    THAT contig's own coordinate frame; this call reads pool[seed_idx]'s
+    entry as the seed's inherited junctions (non-empty only when pool holds
+    already-assembled contigs, i.e. the site-4 contig-contig merge in
+    _dedupe_and_merge_contigs) and registers the working contig's own
+    junction list back into join_map under its current string value after
+    every successful join, so later calls / the caller can look it up by the
+    final returned contig string.
+
+    join_evidence_reads: the whole UMI's raw read pool, used to compute each
+    new junction's verified bridge-read count for join tracing and, when
+    min_join_support > 1, for acceptance itself.
+
+    min_join_support: require this many verified, distinct raw reads across a
+    newly created interior join. The default of 1 preserves legacy output;
+    values >1 are an explicit experimental chimera guard.
+
+    is_merge: True labels every join recorded during this call "contig_merge"
+    regardless of which sub-mechanism (boundary/internal-anchor) found it --
+    matches the trace schema's join_type, which treats "two contigs merged"
+    as one category independent of how the connection was found. Only
+    meaningful when join_map is not None.
     """
     seed_idx = min(available)
     contig = pool[seed_idx]
     used = {seed_idx}
     unused = set(available) - {seed_idx}
+    junctions = list(join_map.get(contig, [])) if join_map is not None else None
 
     changed = True
     while changed:
@@ -1011,25 +1421,85 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
             seq = pool[i]
             extended = False
 
-            for cand in (seq, rc(seq)):
+            for cand, cand_is_rc in ((seq, False), (rc(seq), True)):
                 # try extending contig at 3' end
                 ov = suffix_prefix_overlap(contig, cand, min_ov, max_mm, seed_k)
                 if ov:
-                    contig += cand[ov:]
+                    proposed = contig + cand[ov:]
+                    if not _has_min_join_support(
+                            proposed, len(contig), join_evidence_reads,
+                            min_join_support):
+                        continue
+                    old_contig = contig
+                    contig = proposed
                     unused.remove(i)
                     used.add(i)
                     changed = True
                     extended = True
+                    # ov can legitimately equal len(cand) (candidate fully
+                    # contained in contig's own tail, e.g. a short redundant
+                    # read) -- cand[ov:] is then empty and this "extension"
+                    # adds no new territory (new_pos would equal len(contig),
+                    # past the contig's own last interior offset). Real,
+                    # harmless assembler behavior (a redundant read
+                    # consumed) -- _record_join's own interior-position
+                    # check skips recording a bogus junction for it.
+                    if join_map is not None:
+                        junctions = _record_join(
+                            junctions, join_map, old_contig, contig,
+                            new_pos=len(old_contig),
+                            carried=_candidate_junction_carry(
+                                contig,
+                                {"kind": "append", "new_junction_pos": len(old_contig)},
+                                seq, rc(seq), join_map),
+                            join_type="contig_merge" if is_merge else "boundary_3p",
+                            ov_len=ov, evidence_reads=join_evidence_reads)
                     break
 
                 # try extending contig at 5' end
                 ov = suffix_prefix_overlap(cand, contig, min_ov, max_mm, seed_k)
                 if ov:
-                    contig = cand + contig[ov:]
+                    shift = len(cand) - ov
+                    proposed = cand + contig[ov:]
+                    if not _has_min_join_support(
+                            proposed, shift, join_evidence_reads,
+                            min_join_support):
+                        continue
+                    old_contig = contig
+                    contig = proposed
                     unused.remove(i)
                     used.add(i)
                     changed = True
                     extended = True
+                    if join_map is not None:
+                        # existing junctions: old_contig[ov:] survives (see
+                        # boundary 5' case in _diff_join_geometry's docstring)
+                        # -- keep only those whose full 40bp context also
+                        # survives, not just their bare position (see
+                        # _context_survives).
+                        kept = [dict(j, pos=j["pos"] + shift, lo=j["lo"] + shift)
+                                for j in junctions
+                                if _context_survives(j, ov, len(old_contig))]
+                        inherited = join_map.get(seq, [])
+                        if cand_is_rc:
+                            inherited = _flip_junctions(inherited, len(seq))
+                        junctions = kept + [dict(j) for j in inherited]
+                        # shift == 0 (ov == len(cand)) means cand is fully
+                        # contained in contig's own head -- a real, harmless
+                        # consumed-redundant-read extension with no new
+                        # territory (new_pos would be 0). _record_join's own
+                        # interior-position check (0 < new_pos < len(new))
+                        # skips recording a bogus junction for that case
+                        # while still folding in and registering the
+                        # existing/carried junctions above, which legitimately
+                        # need updating regardless -- cand may differ from
+                        # old_contig[:ov] within the mismatch budget, so its
+                        # own content is still genuinely now part of the draft.
+                        junctions = _record_join(
+                            junctions, join_map, old_contig, contig,
+                            new_pos=shift, carried=[],
+                            join_type="contig_merge" if is_merge else "boundary_5p",
+                            ov_len=ov, evidence_reads=join_evidence_reads)
                     break
 
             if extended:
@@ -1049,11 +1519,56 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
                 contig, pool, kmer_index_holder[0], unused, min_ov, max_mm, seed_k,
                 min_verify=internal_min_verify, check_len_override=internal_check_len)
             if new_contig is not None:
-                contig = new_contig
-                unused.remove(used_idx)
-                used.add(used_idx)
-                changed = True
-                continue
+                old_contig = contig
+                geometry = _diff_join_geometry(old_contig, new_contig)
+                if not _has_min_join_support(
+                        new_contig, geometry["new_junction_pos"],
+                        join_evidence_reads, min_join_support):
+                    new_contig = None
+                if new_contig is None:
+                    pass
+                else:
+                    contig = new_contig
+                    unused.remove(used_idx)
+                    used.add(used_idx)
+                    changed = True
+                # The reverse-3'/reverse-5' variants (see their docstrings)
+                # replace a stretch of contig with a candidate's own content
+                # verified only via the shared max_mm mismatch BUDGET, not
+                # zero-difference equality -- a candidate that happens to
+                # match that stretch exactly (a redundant read genuinely
+                # duplicating already-correct content, common in a
+                # redundant UMI pool) still "succeeds" and consumes a pool
+                # index, but contributes NO new sequence at all. Confirmed
+                # on real 16S data (barcode AAAAAATGTATATGT): three separate
+                # redundant reads each producing a byte-identical contig
+                # this way in succession. That is correct, harmless
+                # assembler behavior (a redundant read consumed, nothing
+                # else changes) -- but it is not a join in the sense this
+                # trace cares about (no new boundary, no chimeric-merge risk
+                # was created), and _diff_join_geometry's startswith check
+                # trivially classifies old==new as "append" with
+                # new_junction_pos == len(contig) -- a position past the
+                # contig's own last valid interior offset. Recording it
+                # produced exactly that (junction_pos == contig_len,
+                # bridge_reads forced to 0 since nothing can span past a
+                # contig's own end) and, since the outer while loop retries
+                # internal-anchor again next iteration, could repeat for
+                # every further redundant candidate -- the duplicate-row
+                # source this was traced back to. Guard on real content
+                # change instead of trusting internal_anchor_extend_indexed's
+                # success return alone.
+                if join_map is not None and contig != old_contig:
+                    cand_fwd = pool[used_idx]
+                    carried = _candidate_junction_carry(
+                        contig, geometry, cand_fwd, rc(cand_fwd), join_map)
+                    junctions = _record_join(
+                        _apply_join_shift(junctions, geometry), join_map,
+                        old_contig, contig, geometry["new_junction_pos"], carried,
+                        join_type="contig_merge" if is_merge else "internal_anchor",
+                        ov_len=-1, evidence_reads=join_evidence_reads)
+                if changed:
+                    continue
 
         # Pairwise raw-read mismatch is the wrong evidence model once a
         # redundant UMI contains independent sequencing errors: it combines
@@ -1086,10 +1601,45 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
             # Requiring progress both prevents the loop and preserves the
             # candidate/evidence separation contract.
             if new_contig is not None and rescue_used:
+                old_contig = contig
                 contig = new_contig
                 unused -= rescue_used
                 used |= rescue_used
                 changed = True
+                if join_map is not None:
+                    # _collective_anchor_extend always retains the prior
+                    # draft byte-identical in the middle (assembled.extend
+                    # (contig) in its own source -- it is an extension
+                    # mechanism, not a second polisher) and may grow either
+                    # or both ends in this one call, unlike every other join
+                    # site here -- so it needs its own bookkeeping rather
+                    # than _diff_join_geometry's single-new-junction model.
+                    prepend_len = contig.find(old_contig)
+                    if prepend_len < 0:
+                        # Invariant above broke; every existing junction's
+                        # pos/lo is only valid in old_contig's frame, so
+                        # registering them unshifted under the NEW contig's
+                        # key would be actively wrong, not just incomplete --
+                        # leave join_map untouched (a later lookup on this
+                        # contig value correctly returns no junctions) rather
+                        # than guess at a position. This is observation, not
+                        # an assembly decision.
+                        pass
+                    else:
+                        append_len = len(contig) - prepend_len - len(old_contig)
+                        jtype = "contig_merge" if is_merge else "collective"
+                        shifted = [dict(j, pos=j["pos"] + prepend_len, lo=j["lo"] + prepend_len)
+                                   for j in junctions]
+                        new_js = []
+                        if prepend_len > 0:
+                            new_js.append(_make_junction(
+                                contig, prepend_len, jtype, -1, join_evidence_reads))
+                        if append_len > 0:
+                            new_js.append(_make_junction(
+                                contig, prepend_len + len(old_contig), jtype, -1,
+                                join_evidence_reads))
+                        junctions = shifted + new_js
+                        join_map[contig] = junctions
 
     return contig, used
 
@@ -1097,7 +1647,8 @@ def _extend_one_contig(pool, available, min_ov, max_mm, seed_k, use_internal_anc
 def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
                        use_internal_anchor=True, internal_min_verify=60,
                        use_collective_rescue=True, use_minimizer_dedup=False,
-                       use_cross_attempt_evidence=True):
+                       use_cross_attempt_evidence=True, join_map=None,
+                       min_join_support=1):
     """
     Greedy seed-extension assembly for one UMI's reads.
 
@@ -1142,11 +1693,29 @@ def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
                   attribute that effect to cross-attempt evidence specifically
                   instead of conflating it with the unrelated endpoint-index
                   speed fix [True]
+    join_map    : None (default, zero cost -- see the "join-level
+                  spanning-guard instrumentation" section above
+                  internal_anchor_extend_indexed) or a dict from contig
+                  string -> junction-record list, threaded into every
+                  _extend_one_contig call (raw-building AND the post-merge
+                  call inside _dedupe_and_merge_contigs) so joins are
+                  traceable end to end. Bridge-support evidence is always
+                  the UMI's WHOLE original read pool (this function's own
+                  `seqs` argument, captured before any minimizer dedup --
+                  a read that could bridge a junction is often one already
+                  consumed by an earlier attempt, or rejected there by the
+                  pairwise mismatch budget, so restricting evidence to
+                  fewer/deduped reads would undercount).
+    min_join_support : verified distinct raw reads required at each newly
+                  created interior join; 1 preserves legacy behavior.
 
     Returns list of contig sequences (0 or more per UMI).
     """
     if not seqs:
         return []
+
+    join_evidence_reads = (seqs if join_map is not None or min_join_support > 1
+                           else None)
 
     if use_minimizer_dedup:
         seqs = _minimizer_dedupe(seqs)
@@ -1194,7 +1763,10 @@ def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
                                           collective_index_holder=collective_index_holder,
                                           collective_evidence_set=collective_evidence_set,
                                           boundary_index=boundary_index,
-                                          max_contig_len=max_contig_len)
+                                          max_contig_len=max_contig_len,
+                                          join_map=join_map,
+                                          join_evidence_reads=join_evidence_reads,
+                                          min_join_support=min_join_support)
         # collect every attempt regardless of length -- filtering by min_ctg
         # here (before _dedupe_and_merge_contigs runs) would silently
         # discard pieces that individually fall short but would merge with
@@ -1211,7 +1783,10 @@ def _assemble_umi_once(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
     merged = _dedupe_and_merge_contigs(raw_contigs, min_ov, max_mm, seed_k,
                                        use_internal_anchor=use_internal_anchor,
                                        internal_min_verify=internal_min_verify,
-                                       max_contig_len=max_contig_len)
+                                       max_contig_len=max_contig_len,
+                                       join_map=join_map,
+                                       join_evidence_reads=join_evidence_reads,
+                                       min_join_support=min_join_support)
     return [c for c in merged if len(c) >= min_ctg]
 
 
@@ -1219,7 +1794,7 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
                  use_internal_anchor=True, internal_min_verify=60,
                  use_collective_rescue=True, use_minimizer_dedup=False,
                  use_cross_attempt_evidence=True, adaptive_seed_k=False,
-                 fallback_seed_k=10):
+                 fallback_seed_k=10, join_map=None, min_join_support=1):
     """Assemble one UMI, optionally retrying a strict k-mer run conservatively.
 
     With ``adaptive_seed_k=True`` and a primary ``seed_k`` larger than
@@ -1229,24 +1804,36 @@ def assemble_umi(seqs, min_ov=20, max_mm=0.05, min_ctg=400, seed_k=10,
     strict result only when it itself produces a valid contig; this keeps the
     rule from merging two independently chosen candidate sets or selecting a
     longer but unsupported fragment.
+
+    join_map: forwarded to _assemble_umi_once -- None (default) disables all
+    join-level tracing/bridge-support computation. When a fallback run
+    replaces the primary result, join_map may still carry leftover entries
+    for the discarded primary run's contigs; harmless, since only the
+    actually-returned contigs' strings are ever looked up.
+
+    min_join_support: minimum number of distinct raw reads that must bridge a
+    newly created interior join. Defaults to 1 to preserve legacy behavior.
     """
     result = _assemble_umi_once(
         seqs, min_ov, max_mm, min_ctg, seed_k, use_internal_anchor,
         internal_min_verify, use_collective_rescue, use_minimizer_dedup,
-        use_cross_attempt_evidence)
+        use_cross_attempt_evidence, join_map=join_map,
+        min_join_support=min_join_support)
     if (not adaptive_seed_k or seed_k <= fallback_seed_k
             or any(len(c) >= min_ctg for c in result)):
         return result
     fallback = _assemble_umi_once(
         seqs, min_ov, max_mm, min_ctg, fallback_seed_k, use_internal_anchor,
         internal_min_verify, use_collective_rescue, use_minimizer_dedup,
-        use_cross_attempt_evidence)
+        use_cross_attempt_evidence, join_map=join_map,
+        min_join_support=min_join_support)
     return fallback or result
 
 
 def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
                               use_internal_anchor=True, internal_min_verify=60,
-                              max_contig_len=None):
+                              max_contig_len=None, join_map=None,
+                              join_evidence_reads=None, min_join_support=1):
     """
     Post-process the contig list from one UMI: the outer loop in
     assemble_umi builds each contig from a single greedy pass, so a read
@@ -1297,6 +1884,16 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
     back together uncapped defeats the raw-phase cap entirely (a real
     incident barcode did exactly this -- 8 raw attempts at ~3kb each
     re-merged into one 24kb contig before this parameter existed here).
+
+    join_map / join_evidence_reads: forwarded to _extend_one_contig with
+    is_merge=True (see its docstring) -- None (default) disables all
+    join-level tracing/bridge-support computation for this merge phase.
+    Note `contigs` here are themselves already-assembled contigs, not raw
+    reads: this is the ONE call site where pool entries can carry their own
+    inherited junctions (from the raw-building phase in _assemble_umi_once),
+    which is why _extend_one_contig looks candidates' prior junctions up in
+    join_map by their own string value rather than needing a second parallel
+    list threaded through this dedupe/sort.
     """
     if len(contigs) <= 1:
         return contigs
@@ -1320,7 +1917,11 @@ def _dedupe_and_merge_contigs(contigs, min_ov, max_mm, seed_k,
                                           kmer_index_holder=kmer_index_holder,
                                           internal_check_len=wide_check_len,
                                           boundary_index=boundary_index,
-                                          max_contig_len=max_contig_len)
+                                          max_contig_len=max_contig_len,
+                                          join_map=join_map,
+                                          join_evidence_reads=join_evidence_reads,
+                                          is_merge=True,
+                                          min_join_support=min_join_support)
         merged.append(contig)
         available -= used
 
@@ -1533,6 +2134,115 @@ def _write_contigs(barcode, contigs, out_file, lock, max_contigs):
             fh.write(block)
 
 
+_JOIN_TRACE_HEADER = ("barcode\tcontig_idx\tjoin_type\tov_len\tjunction_pos\t"
+                      "contig_len\tbridge_reads\tn_evidence_reads\t"
+                      "ctx_pos_agrees\tctx_pos_agrees_fuzzy\n")
+
+_FUZZY_MAX_MISMATCHES = 3
+_FUZZY_SEARCH_RADIUS = 10
+
+
+def _fuzzy_context_agrees(final, context, lo, max_mismatches=_FUZZY_MAX_MISMATCHES,
+                          radius=_FUZZY_SEARCH_RADIUS):
+    """Best-scoring alignment of the recorded context over `final` within
+    +/- radius of the tracked position `lo`, tolerating up to
+    max_mismatches substitutions -- never indels, since polish_contig (the
+    only source of drift between the context's own draft and `final`) is
+    documented substitution-only, same length, no indels ever. Returns 1
+    iff some offset in that window scores <= max_mismatches.
+
+    This is the discriminator between "bookkeeping put the position in the
+    wrong place" (fails at every nearby offset too) and "the position is
+    right but polish edited a few bases inside the window" (succeeds at or
+    very near the recorded lo, within the mismatch budget) -- deliberately
+    independent of ctx_pos_agrees's exact match and of lo itself: it
+    re-searches nearby rather than trusting the recorded position outright.
+    """
+    if not context:
+        return 0
+    n, L = len(final), len(context)
+    if L > n:
+        return 0
+    best = None
+    for cand_lo in range(max(0, lo - radius), min(n - L, lo + radius) + 1):
+        window = final[cand_lo:cand_lo + L]
+        hd = sum(1 for a, b in zip(window, context) if a != b)
+        if best is None or hd < best:
+            best = hd
+            if best == 0:
+                break
+    return 1 if best is not None and best <= max_mismatches else 0
+
+
+def _write_join_trace(barcode, draft_contigs, final_contigs, join_map,
+                      n_evidence_reads, out_path, lock, max_contigs):
+    """
+    Append one TSV row per join that survives into an EMITTED contig (a join
+    belonging to a raw/merged contig dropped by containment filtering or the
+    max_contigs truncation never appears here) to --join-trace's output.
+    Multiprocessing-safe via the same lock pattern as _write_contigs.
+
+    draft_contigs: assemble_umi's own return value, BEFORE _polish_all.
+    join_map is keyed by the exact draft contig string each join produced,
+    and polish_contig's substitution-only correction (see its docstring --
+    same length, no indels, ever) means the post-polish string is almost
+    never byte-identical to any join_map key even though junction POSITIONS
+    are unaffected by it.
+
+    final_contigs: the POST-polish contigs actually handed to _write_contigs
+    -- contig_idx below matches _write_contigs' own [:max_contigs]
+    truncation and the emitted header's k41_{i} exactly, since ground truth
+    for any downstream consumer of this trace is built on that same index.
+    Context relocation (ctx_pos_agrees) is deliberately checked against this
+    final, actually-emitted string, not the pre-polish draft: that is the
+    real end-to-end validation, including whatever a handful of polish
+    substitutions inside a 40bp context window may have done to it.
+    """
+    if not draft_contigs:
+        return
+    rows = []
+    for i, (draft, final) in enumerate(zip(draft_contigs[:max_contigs],
+                                           final_contigs[:max_contigs])):
+        for j in join_map.get(draft, []):
+            pos = j["pos"]
+            # _make_junction already asserts every junction is interior at
+            # CREATION time; re-asserting here against the actual emitted
+            # contig_len (post-polish, same length as draft -- see
+            # polish_contig's docstring) is the end-to-end regression guard:
+            # a bug in a LATER shift/carry step could in principle move a
+            # once-valid position out of range even though it started fine.
+            # This is diagnostic tracing (--join-trace opt-in only), so it
+            # fails loudly rather than silently writing a row whose
+            # bridge_reads is structurally forced to 0 by construction, not
+            # by biology.
+            assert 0 < pos < len(final), (
+                "emitted junction position must be strictly interior: "
+                "barcode=%s contig_idx=%d join_type=%s pos=%d contig_len=%d"
+                % (barcode, i, j["join_type"], pos, len(final)))
+            # j["lo"] is the context's own tracked start offset -- shifted in
+            # lockstep with pos through every join this junction survived
+            # (see _junction_context) -- NOT re-derived from pos here, since
+            # a junction captured near an earlier, shorter draft's edge has
+            # an asymmetrically-clamped window that max(0, pos-half) cannot
+            # reconstruct after later shifts.
+            found = final.find(j["context"]) if j["context"] else -1
+            agrees = 1 if found == j["lo"] else 0
+            agrees_fuzzy = _fuzzy_context_agrees(final, j["context"], j["lo"])
+            rows.append("\t".join(str(x) for x in (
+                barcode, i, j["join_type"], j["ov_len"], pos, len(final),
+                j["bridge_reads"], n_evidence_reads, agrees, agrees_fuzzy)) + "\n")
+    if not rows:
+        return
+    block = "".join(rows)
+    with lock:
+        write_header = (not os.path.exists(out_path)
+                        or os.path.getsize(out_path) == 0)
+        with open(out_path, "a") as fh:
+            if write_header:
+                fh.write(_JOIN_TRACE_HEADER)
+            fh.write(block)
+
+
 # ── per-barcode workers (drop-in replacements) ────────────────────────────────
 
 def _seqs_from_meta(meta, barcode):
@@ -1573,10 +2283,17 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
     use_cross_evidence = _CFG["use_cross_attempt_evidence"]
     adaptive_seed_k = _CFG["adaptive_seed_k"]
     fallback_seed_k = _CFG["fallback_seed_k"]
+    min_join_support = _CFG["min_join_support"]
+    join_trace_path = _CFG["join_trace"]
 
     seqs = _seqs_from_meta(shared_meta_data2, barcode)
     if not seqs:
         return
+
+    # None (the default) keeps assemble_umi on its exact pre-instrumentation
+    # path -- every join_map-gated branch it touches is skipped outright, so
+    # this flag OFF is byte-identical output, not just "traces nothing".
+    join_map = {} if join_trace_path else None
 
     contigs = None
     if use_mp is not False:
@@ -1588,10 +2305,16 @@ def process_barcode_se(barcode, shared_meta_data2, lock):
                                use_minimizer_dedup=use_dedup,
                                use_cross_attempt_evidence=use_cross_evidence,
                                adaptive_seed_k=adaptive_seed_k,
-                               fallback_seed_k=fallback_seed_k)
+                               fallback_seed_k=fallback_seed_k,
+                               join_map=join_map,
+                               min_join_support=min_join_support)
 
+    draft_contigs = contigs
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock, max_contigs)
+    if join_map is not None:
+        _write_join_trace(barcode, draft_contigs, contigs, join_map, len(seqs),
+                          join_trace_path, lock, max_contigs)
 
 
 def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
@@ -1609,12 +2332,16 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
     use_cross_evidence = _CFG["use_cross_attempt_evidence"]
     adaptive_seed_k = _CFG["adaptive_seed_k"]
     fallback_seed_k = _CFG["fallback_seed_k"]
+    min_join_support = _CFG["min_join_support"]
+    join_trace_path = _CFG["join_trace"]
 
     r1 = _seqs_from_meta(shared_meta_data1, barcode)
     r2 = _seqs_from_meta(shared_meta_data2, barcode)
     seqs = r1 + r2
     if not seqs:
         return
+
+    join_map = {} if join_trace_path else None
 
     contigs = None
     if use_mp is not False:
@@ -1626,10 +2353,16 @@ def process_barcode_pe(barcode, shared_meta_data1, shared_meta_data2, lock):
                                use_minimizer_dedup=use_dedup,
                                use_cross_attempt_evidence=use_cross_evidence,
                                adaptive_seed_k=adaptive_seed_k,
-                               fallback_seed_k=fallback_seed_k)
+                               fallback_seed_k=fallback_seed_k,
+                               join_map=join_map,
+                               min_join_support=min_join_support)
 
+    draft_contigs = contigs
     contigs = _polish_all(contigs, seqs, min_ov, max_mm, seed_k)
     _write_contigs(barcode, contigs, out_file, lock, max_contigs)
+    if join_map is not None:
+        _write_join_trace(barcode, draft_contigs, contigs, join_map, len(seqs),
+                          join_trace_path, lock, max_contigs)
 
 
 # ── sgrep TSV parsing (same format as denovo_clfr_ram.add_sgrep_line) ──────────
@@ -1967,6 +2700,21 @@ def _build_arg_parser():
                          "merge safety, always one contig per barcode, no single-read "
                          "UMI support). Opt-in only, for experimentation; see "
                          "_assemble_umi_mappy's docstring")
+    ap.add_argument("--min-join-support", type=int, default=1,
+                    help="verified distinct raw reads required across a newly created "
+                         "interior join [1]. Values above 1 are an experimental "
+                         "chimera guard and apply only to the seed-extension path.")
+    ap.add_argument("--join-trace", dest="join_trace", type=str, default=None,
+                    help="write one TSV row per join that survives into an emitted "
+                         "contig (barcode, contig_idx, join_type, ov_len, "
+                         "junction_pos, contig_len, bridge_reads, n_evidence_reads, "
+                         "ctx_pos_agrees) to PATH -- OFF by default (None): explicit "
+                         "opt-IN only, matching this file's own convention (see "
+                         "_configure_from_args's docstring for why an opt-OUT default "
+                         "has twice caused a silent-default production incident here). "
+                         "Pure observation -- computes verified bridge-read support at "
+                         "each join for a future spanning guard but never changes an "
+                         "assembly decision itself; leaving this unset costs nothing")
     return ap
 
 
@@ -1999,7 +2747,9 @@ def _configure_from_args(args):
               max_contigs=args.max_contigs,
               use_minimizer_dedup=args.minimizer_dedup,
               use_cross_attempt_evidence=not args.no_cross_attempt_evidence,
-              use_mappy=args.mappy)
+              use_mappy=args.mappy,
+              min_join_support=args.min_join_support,
+              join_trace=args.join_trace)
 
 
 def _git_version_string():
@@ -2040,6 +2790,12 @@ def _main_cli():
 
     if not os.path.isdir("denovo"):
         os.makedirs("denovo")
+
+    if args.join_trace:
+        trace_dir = os.path.dirname(os.path.abspath(args.join_trace))
+        if trace_dir and not os.path.isdir(trace_dir):
+            os.makedirs(trace_dir)
+        print("join_trace={}".format(args.join_trace), flush=True)
 
     version_line = "run_start={} denovo_seed_olc.py {}".format(
         datetime.datetime.now(), _git_version_string())

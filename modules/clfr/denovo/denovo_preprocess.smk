@@ -34,6 +34,10 @@ rule select_denovo_barcodes:
     # low-diversity barcodes here. The two known incident barcodes with no
     # 'N' are instead bounded by denovo_seed_olc.py's _extend_one_contig
     # max_contig_len backstop, which doesn't need to guess the cause.
+    # Reject pathological depth outliers as well: a UMI with more than 10,000
+    # reads is outside the normal molecule-depth regime and would otherwise
+    # dominate both assembler time and memory. The boundary is inclusive so a
+    # UMI with exactly 10,000 reads remains eligible.
     input:
         "split_stat_read1.log"
     output:
@@ -46,7 +50,7 @@ rule select_denovo_barcodes:
         """
         mkdir -p denovo
         awk -F '\\t' -v cutoff={params.reads_per_BC} \
-            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff && $3 !~ /N/ {{print "BX:Z:" $3}}' \
+            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff && $2 + 0 <= 10000 && $3 !~ /N/ {{print "BX:Z:" $3}}' \
             {input} > {output}
         """
 
