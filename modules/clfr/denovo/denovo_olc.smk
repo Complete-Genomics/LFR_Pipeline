@@ -101,6 +101,22 @@ if QC_PRESET_NAME not in QC_PRESETS and QC_PRESET_NAME != "auto":
         .format(QC_PRESET_NAME, sorted(QC_PRESETS)))
 
 
+# ---------------------------------------------------------------------------
+# Candidate selection: which of a UMI's assembled candidates (k41_0, k41_1,
+# ...) gets delivered. Default 'longest' is the historical, unchanged
+# behaviour (always k41_0). Opt-in 'gated_switch' is denovo.md sec 109-120's
+# rule-only switch -- NOT flipped as the new default, matching this file's
+# existing precedent for the read-filter ML tie-break (sec above,
+# frag_de_novo.read_filter_ml_model): validated on a one-time held-out eval
+# but with a severe-loss caveat (sec 116/117/120) that needs to be understood
+# before turning it on. See denovo_candidate_select.py's module docstring for
+# the full rationale.
+# ---------------------------------------------------------------------------
+CANDIDATE_SELECT_MODE = config['frag_de_novo'].get('candidate_select', 'longest')
+if CANDIDATE_SELECT_MODE not in ('longest', 'gated_switch'):
+    raise ValueError(
+        "frag_de_novo.candidate_select={!r} is not a known mode; choose "
+        "'longest' (default) or 'gated_switch'".format(CANDIDATE_SELECT_MODE))
 def resolve_qc(probe_path=None):
     """Return (preset_name, settings dict).
 
@@ -340,35 +356,69 @@ rule run_denovoOLC_parallel:
         shell(" ".join(command))
 
 
+# Candidate-level shadow scoring is an optional sidecar. It shares this run's
+# OLC candidates and raw read pool but never affects delivery or QC; see
+# denovo_shadow.smk.
+include: config['params']['src_dir'] + "/modules/clfr/denovo/denovo_shadow.smk"
+
+
 ## denovo_seed_olc.py already writes each barcode's contigs longest-first
-## (k41_0 == longest), so "keep only k41_0" == "keep only the longest per UMI".
+## (k41_0 == longest). By default this rule still just keeps k41_0
+## unconditionally ("keep only the longest per UMI") -- unchanged from
+## before candidate selection existed as a choice. Opt-in
+## frag_de_novo.candidate_select: gated_switch switches to the first
+## k41_rank-ordered candidate passing span_cov_ratio>=0.25 &&
+## placed_reads>=2, falling back to k41_0 otherwise (denovo.md sec 109-112);
+## read denovo_candidate_select.py's module docstring (severe-loss caveat,
+## sec 116/117/120) before turning it on.
+## The output filename stays denovo.longest.fasta for every downstream rule
+## regardless of mode -- which candidate actually got delivered per barcode
+## is always in denovo/candidate_select_report.tsv, never implied by the name.
 rule filterOLC_longest:
     input:
-        "denovo/frag_denovo_done"
+        contigs_done="denovo/frag_denovo_done",
+        candidate_qc="denovo/junction_qc_candidates.tsv",
+        probe="denovo/read_filter_probe.tsv"
     output:
-        "denovo/denovo.longest.fasta"
+        fasta="denovo/denovo.longest.fasta",
+        report="denovo/candidate_select_report.tsv",
+        decision="denovo/candidate_select_decision.tsv"
     benchmark:
         "Benchmarks/denovo.filterOLC_longest.txt"
     params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        mode = CANDIDATE_SELECT_MODE,
+        max_span_ratio = qc_setting('max_span_ratio'),
+        min_placed_reads = config['frag_de_novo'].get('gated_switch_min_placed_reads', 2),
         run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
         if not params.run_parallel:
-            shell("touch {output}")
+            shell("touch {output.fasta} {output.report} {output.decision}")
             return
 
-        shell("""
-            awk '
-                /^>/ {{
-                    if (seq != "" && keep) print header"\\n"seq
-                    header=$0
-                    keep = (header ~ /k41_0$/)
-                    seq=""
-                    next
-                }}
-                {{ seq = seq $0 }}
-                END {{ if (seq != "" && keep) print header"\\n"seq }}
-            ' denovo/final_contigs_0.fa > {output}
-        """)
+        # Re-resolve here (rather than trusting the params default above)
+        # so a gated_switch gate threshold under qc_preset=auto matches the
+        # same probe-informed value junctionQCAllCandidates_olc used to
+        # compute denovo/junction_qc_candidates.tsv -- the params default is
+        # only a DAG-build-time placeholder (qc_preset=auto resolves to
+        # 'balanced' there, since the probe output does not exist yet).
+        _name, qc = resolve_qc(input.probe)
+        params.max_span_ratio = qc["max_span_ratio"]
+
+        command = ["{params.python}",
+                    "{params.src_dir}/modules/clfr/denovo/denovo_candidate_select.py",
+                    "--contigs denovo/final_contigs_0.fa",
+                    "--mode {params.mode}",
+                    "--out-fasta {output.fasta}",
+                    "--out-report {output.report}",
+                    "--out-decision {output.decision}"]
+        if params.mode == "gated_switch":
+            command += ["--candidate-qc {input.candidate_qc}",
+                        "--max-span-ratio {params.max_span_ratio}",
+                        "--min-placed-reads {params.min_placed_reads}"]
+        shell(" ".join(command))
+
 
 rule plotOLC_frag_len_distribution:
     input:
@@ -585,6 +635,7 @@ rule combineQC_olc:
 rule olc_done:
     input:
         "denovo/denovo.longest.fasta",
+        "denovo/candidate_select_report.tsv",
         "denovo/frag_length_distribution.pdf",
         "denovo/qc_report.tsv",
         "denovo/denovo.longest.highconf.fasta",

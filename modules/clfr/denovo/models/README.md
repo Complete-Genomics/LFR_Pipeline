@@ -59,3 +59,61 @@ this copy was reproduced. `random_inspection.smk` exists to re-run that same
 validation on demand against any model file, including this one — check
 denovo.md for whether that re-validation has been completed with this exact
 file before trusting the original numbers apply here unchanged.
+
+## model_candidate_chimera.lgb
+
+LightGBM classifier predicting P(confident_chimera) for one assembled
+candidate contig (a UMI's k41_0..k41_N OLC output), from 7 features computed
+by `denovo_junction_qc.py --all-candidates`. This is a different model from
+`model_identity.lgb` above (that one scores individual reads pre-assembly;
+this one scores whole assembled candidate contigs post-assembly) and is
+consumed by `denovo_shadow_score.py`, wired through the optional
+`denovo_shadow.smk` sidecar via `frag_de_novo.shadow_score_model`. It writes
+`denovo/shadow/candidate_scores.tsv` and `denovo/shadow/umi_summary.tsv` only
+when those shadow targets are explicitly requested; neither output is an
+input to the production delivery target.
+
+**Production role: SHADOW ONLY.** This model's score must never be allowed
+to change which candidate gets delivered. `denovo_candidate_select.py`'s
+`gated_switch` mode (the validated, rule-only candidate switch) does not use
+it at all. Every active-selection deployment shape tried for this model
+(argmin-in-gate ranking, length/support guardrails on top of it, an
+asymmetric veto) either reproduced or failed to fix a severe-loss regression
+too large to ship, and all training/eval was on the ZymoBIOMICS control, so
+there is currently no way to verify it against ground truth on a real
+sample. See `denovo.md` sec 106-120 for the full narrative (sec 118 has the
+deployment decision; sec 120 has the most recent revisit of it) before ever
+reconsidering a more active role.
+
+**Feature contract** (read by name via pandas/the training script, not
+positional):
+
+    span_cov_ratio, min_local_span_ratio, placed_reads, contig_len,
+    len_ratio, k41_rank, n_candidates
+
+`len_ratio` and `n_candidates` are derived per barcode from the full
+candidate set (not columns `denovo_junction_qc.py` writes directly) — see
+`denovo_shadow_score.py`'s `build_features()` for the exact derivation used
+at inference time, and `denovo_train_candidate_model.py`'s
+`add_derived_features()` for training time.
+
+**Provenance**: trained 2026-08-20 on the ZymoBIOMICS mock community,
+reproducing the exact frozen recipe validated in denovo.md sec 107-112
+(`LGBMClassifier(n_estimators=300, max_depth=5, learning_rate=0.05,
+num_leaves=31, min_child_samples=30)`, quarter-split ground-truth labels,
+57,840 decidable candidates pooled from the original 2,000-barcode training
+set plus the sec109 20,000-barcode expansion, 5-fold GroupKFold-by-barcode
+CV accuracy 0.9742). Retraining script: `denovo_train_candidate_model.py`.
+The training workspace (filtered candidate-qc/label TSVs) is scratch, not
+git-tracked; the underlying labeled data lives in
+`salvage/2026-08-19_ml_draft_gain_optionB/` and
+`salvage/2026-08-19_n5k_20k_case_expansion/`.
+
+**Validation status**: the model's *ranking* ability was validated on a
+one-time held-out set (tail_raw, sec 112: within-UMI pairwise accuracy 0.85
+vs 0.76 for the best single rule feature — genuine generalization, not
+overfitting). Its *deployment* as an active decision-maker was NOT
+validated — see the shadow-only note above. If this file is retrained, the
+sec 112 tail_raw numbers no longer apply to it until re-verified (that
+held-out set has already been spent once and should not be re-used
+casually — see denovo.md sec 112's own note on this).

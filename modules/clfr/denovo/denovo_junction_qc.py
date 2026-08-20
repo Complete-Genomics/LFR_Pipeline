@@ -17,6 +17,13 @@ position count reads that cross it with >= margin bp on BOTH sides. A true
 single-molecule contig has a roughly uniform spanning profile; a chimera has
 a sharp dip (often to zero) at the junction while ordinary coverage stays
 healthy on both flanks.
+
+By default this only scores the longest candidate per barcode (k41_0), which
+is all the production flagging pipeline (denovo_qc_combine.py) needs.
+--all-candidates additionally scores every other assembled candidate
+(k41_1, k41_2, ...) so denovo_candidate_select.py (gated_switch mode) and
+denovo_shadow_score.py can gate/score the whole set, not just whatever was
+already picked (denovo.md sec 109-112/116-120).
 """
 import argparse
 import csv
@@ -188,17 +195,28 @@ def _init_worker(cfg, contigs):
 
 
 def _analyze_one(job):
-    """(barcode, reads) -> (barcode, result dict or None). Contigs come from
-    the worker-global map so the (large) contig set is shipped once at pool
-    startup rather than once per barcode."""
+    """(barcode, reads) -> (barcode, [(k41_rank, result dict or None), ...]).
+    Contigs come from the worker-global map so the (large) contig set is
+    shipped once at pool startup rather than once per barcode.
+
+    Default: only the longest candidate (k41_rank 0), matching every
+    existing caller. With --all-candidates, one entry per contig in file
+    order -- denovo_seed_olc.py guarantees that order is longest-first
+    (k41_rank 0 == k41_0), which is the same order-as-rank assumption
+    filterOLC_longest already relies on. Needed by denovo_candidate_select.py
+    (gated_switch mode) and denovo_shadow_score.py, both of which have to
+    gate/score every candidate, not just whichever one a caller already
+    picked."""
     barcode, reads = job
     seqs = _CONTIGS.get(barcode)
     if not seqs:
-        return barcode, None
-    contig = max(seqs, key=len)
-    return barcode, analyze(contig, reads, _CFG["margin"], _CFG["edge_skip"],
-                             _CFG["min_side_identity"], _CFG["window"],
-                             _CFG["smooth"])
+        return barcode, []
+    candidates = seqs if _CFG["all_candidates"] else [max(seqs, key=len)]
+    return barcode, [
+        (rank, analyze(contig, reads, _CFG["margin"], _CFG["edge_skip"],
+                        _CFG["min_side_identity"], _CFG["window"], _CFG["smooth"]))
+        for rank, contig in enumerate(candidates)
+    ]
 
 
 def main():
@@ -232,6 +250,16 @@ def main():
                           "(AUC 0.66 vs 0.83) but its extreme tail is very pure: "
                           "on the Zymo control, 0.20 keeps 10%% of contigs at 97.8%% "
                           "mean identity vs 95.4%% for span_cov_ratio alone")
+    ap.add_argument("--all-candidates", action="store_true",
+                     help="score every candidate contig per barcode (as "
+                          "produced by denovo_seed_olc.py's "
+                          "final_contigs_N.fa, k41_0 first) instead of only "
+                          "the longest. Adds a `k41_rank`/`header` column "
+                          "(k41_rank 0 == k41_0). Required input for "
+                          "denovo_candidate_select.py's gated_switch mode "
+                          "and for denovo_shadow_score.py -- both need every "
+                          "candidate's QC, not just whichever one a caller "
+                          "already picked")
     ap.add_argument("--num_processes", type=int, default=1)
     ap.add_argument("--batch-barcodes", type=int, default=20000,
                      help="barcodes held in memory per parallel batch; the read "
@@ -244,12 +272,13 @@ def main():
     contigs = load_fasta(args.contigs)
     cfg = {"margin": args.margin, "edge_skip": args.edge_skip,
            "min_side_identity": args.min_side_identity,
-           "window": args.window, "smooth": args.smooth}
+           "window": args.window, "smooth": args.smooth,
+           "all_candidates": args.all_candidates}
 
-    fields = ["barcode", "contig_len", "placed_reads", "min_spanning_depth",
-              "min_spanning_pos", "plain_depth_at_min", "median_spanning_depth",
-              "median_plain_depth", "span_cov_ratio", "min_local_span_ratio",
-              "min_local_span_pos", "junction_suspect"]
+    fields = ["barcode", "header", "k41_rank", "contig_len", "placed_reads",
+              "min_spanning_depth", "min_spanning_pos", "plain_depth_at_min",
+              "median_spanning_depth", "median_plain_depth", "span_cov_ratio",
+              "min_local_span_ratio", "min_local_span_pos", "junction_suspect"]
     pool = None
     if args.num_processes > 1:
         import multiprocessing as mp
@@ -274,16 +303,18 @@ def main():
                 results = pool.map(_analyze_one, batch, chunksize=1)
             else:
                 results = [_analyze_one(j) for j in batch]
-            for barcode, res in results:
-                if res is None:
-                    continue
-                n_total += 1
-                suspect = int(res["span_cov_ratio"] < args.max_span_ratio
-                                or res["min_local_span_ratio"] < args.min_local_span_ratio)
-                n_flag += suspect
-                row = {"barcode": barcode, "junction_suspect": suspect}
-                row.update(res)
-                writer.writerow(row)
+            for barcode, per_candidate in results:
+                for rank, res in per_candidate:
+                    if res is None:
+                        continue
+                    n_total += 1
+                    suspect = int(res["span_cov_ratio"] < args.max_span_ratio
+                                    or res["min_local_span_ratio"] < args.min_local_span_ratio)
+                    n_flag += suspect
+                    row = {"barcode": barcode, "header": f"{barcode}>k41_{rank}",
+                           "k41_rank": rank, "junction_suspect": suspect}
+                    row.update(res)
+                    writer.writerow(row)
 
         batch = []
         seen = 0
