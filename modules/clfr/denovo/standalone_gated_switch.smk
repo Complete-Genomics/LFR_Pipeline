@@ -15,7 +15,7 @@
 #   num_processes       default 4
 #   max_span_ratio      default 0.25
 #   min_local_span_ratio default 0.0 (disabled)
-#   min_placed_reads    default 2
+#   min_placed_reads    default 5 (sec 117/123/124)
 #   uchime              default false; opt-in reference-free UCHIME QC
 
 import sys
@@ -41,7 +41,7 @@ SG_VSEARCH = SG.get("vsearch", "vsearch")
 SG_NPROC = SG.get("num_processes", 4)
 SG_MAX_SPAN = SG.get("max_span_ratio", 0.25)
 SG_MIN_LOCAL_SPAN = SG.get("min_local_span_ratio", 0.0)
-SG_MIN_PLACED = SG.get("min_placed_reads", 2)
+SG_MIN_PLACED = SG.get("min_placed_reads", 5)
 SG_UCHIME = SG.get("uchime", False)
 SG_SRC = str(Path(workflow.basedir).resolve())
 

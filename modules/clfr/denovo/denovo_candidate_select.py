@@ -10,19 +10,21 @@ Two modes:
 
   gated_switch (opt-in, denovo.md sec 109-112): deliver the first
     k41_rank-ordered candidate with span_cov_ratio >= --max-span-ratio AND
-    placed_reads >= --min-placed-reads, falling back to k41_0 if no
-    candidate qualifies. Rule-only, no model -- validated by a one-time
-    tail_raw held-out eval (sec 112): decidable-basis chimera rate
-    9.64% -> 5.52%.
+    placed_reads >= --min-placed-reads (default 5, sec 117/123/124), falling
+    back to k41_0 if no candidate qualifies. Rule-only, no model -- validated
+    by a one-time tail_raw held-out eval (sec 112): decidable-basis chimera
+    rate 9.64% -> 5.52% at the old placed_reads>=2 gate (5.65% at the current
+    >=5 default, sec 124).
 
-    Caveat worth reading before turning this on (sec 116/117/120): measured
-    WITHOUT any post-selection polish, this rule's severe-loss (>=5pt
-    identity drop vs k41_0) was 3.93% on that same tail_raw set -- right at
-    the project's 3% acceptance line, and above it on that particular
-    sample (merged-pool measured 1.92%, comfortably under; the two samples
-    disagree). A racon polish step after selection (sec 100/103) is known to
-    help but is NOT wired into this pipeline yet. `denovo/
-    candidate_select_report.tsv`'s `switched` column is exactly the
+    Racon polish after selection was evaluated (sec 100/103) and dropped
+    (2026-08-21, not worth the engineering effort) -- this rule is meant to
+    run standalone, no polish step. That was viable because of sec 124: at
+    the old placed_reads>=2 gate, severe-loss (>=5pt identity drop vs k41_0)
+    measured 3.93% on tail_raw -- above the project's 3% acceptance line
+    (merged-pool measured only 1.92% at the same gate, sec 117; the two
+    samples disagreed). Raising the gate to >=5 (this default) resolved it
+    on both: tail_raw severe-loss 3.93% -> 2.10%, merged-pool 1.92% -> 1.09%.
+    `denovo/candidate_select_report.tsv`'s `switched` column is still the
     diagnostic to watch if this is enabled on new data: an unexpectedly high
     switch rate on a real sample is the earliest signal something differs
     from Zymo.
@@ -133,7 +135,7 @@ def main():
                           "required when --mode gated_switch")
     ap.add_argument("--mode", choices=["longest", "gated_switch"], default="longest")
     ap.add_argument("--max-span-ratio", type=float, default=0.25)
-    ap.add_argument("--min-placed-reads", type=int, default=2)
+    ap.add_argument("--min-placed-reads", type=int, default=5)
     ap.add_argument("--out-fasta", required=True)
     ap.add_argument("--out-report", required=True,
                      help="per-barcode outcome: which candidate was "

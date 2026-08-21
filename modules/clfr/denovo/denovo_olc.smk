@@ -399,7 +399,7 @@ rule filterOLC_longest:
         src_dir = config['params']['src_dir'],
         mode = CANDIDATE_SELECT_MODE,
         max_span_ratio = qc_setting('max_span_ratio'),
-        min_placed_reads = config['frag_de_novo'].get('gated_switch_min_placed_reads', 2),
+        min_placed_reads = config['frag_de_novo'].get('gated_switch_min_placed_reads', 5),
         run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
         if not params.run_parallel:
