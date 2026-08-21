@@ -10,3 +10,17 @@ resources/
 modules/clfr/denovo/test/
 subprojects/
 run_metadata/
+
+# Reference databases: path convention lives in modules/clfr/denovo/db/, but
+# the actual files (GB-scale) are not git-tracked -- see db/README.md.
+modules/clfr/denovo/db/*
+!modules/clfr/denovo/db/README.md
+
+# Local checkpointed analysis data.  Keep the policy/index in Git, but not
+# multi-GB FASTQ/TSV/model-validation artifacts.
+modules/clfr/denovo/salvage/*
+!modules/clfr/denovo/salvage/README.md
+modules/clfr/denovo/models/
+modules/clfr/denovo/test/
+modules/clfr/denovo/counterfactual/
+.snakemake/
