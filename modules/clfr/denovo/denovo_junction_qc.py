@@ -260,7 +260,8 @@ def main():
                           "and for denovo_shadow_score.py -- both need every "
                           "candidate's QC, not just whichever one a caller "
                           "already picked")
-    ap.add_argument("--num_processes", type=int, default=1)
+    ap.add_argument("--num_processes", "--num-processes",
+                    dest="num_processes", type=int, default=1)
     ap.add_argument("--batch-barcodes", type=int, default=20000,
                      help="barcodes held in memory per parallel batch; the read "
                           "set is streamed rather than fully loaded, which at "

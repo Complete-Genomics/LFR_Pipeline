@@ -323,7 +323,6 @@ rule readFilter_olc:
 
 rule run_denovoOLC_parallel:
     input:
-        "denovo/data_R1_sorted.tsv",
         "denovo/data_R2_readfilt.tsv"
     output:
         "denovo/frag_denovo_done"
