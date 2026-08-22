@@ -7,9 +7,10 @@
 #
 # Config (under `standalone_gated_switch:`):
 #   contigs             required raw final_contigs_0.fa with all candidates
-#   raw_r2              required pre-read-filter (or noisy-preprocessed) TSV
-#   filtered_r2         required read-filtered TSV for read-back QC
-#   outdir              default "standalone_gated_switch"
+#   raw_r2              required data_R2_sorted.tsv (or noisy-preprocessed TSV)
+#   filtered_r2         optional read-filtered TSV; defaults to raw_r2
+#   outdir              default directory containing contigs
+#   highconf            default <outdir>/final_contigs_highconf.fa
 #   python              default current Python executable
 #   vsearch             default "vsearch"
 #   num_processes       default 4
@@ -34,8 +35,11 @@ def sg_required(name):
 
 SG_CONTIGS = sg_required("contigs")
 SG_RAW_R2 = sg_required("raw_r2")
-SG_FILTERED_R2 = sg_required("filtered_r2")
-SG_OUT = SG.get("outdir", "standalone_gated_switch")
+# A standalone rerun may predate the optional read-filter stage; in that case
+# run read-back QC against the same sorted pool used by the candidate QC.
+SG_FILTERED_R2 = SG.get("filtered_r2") or SG_RAW_R2
+SG_OUT = SG.get("outdir", str(Path(SG_CONTIGS).parent))
+SG_HIGHCONF = SG.get("highconf", f"{SG_OUT}/final_contigs_highconf.fa")
 SG_PYTHON = SG.get("python", sys.executable)
 SG_VSEARCH = SG.get("vsearch", "vsearch")
 SG_NPROC = SG.get("num_processes", 4)
@@ -48,7 +52,7 @@ SG_SRC = str(Path(workflow.basedir).resolve())
 
 rule standalone_gated_switch_all:
     input:
-        f"{SG_OUT}/gated_switch.highconf.fasta",
+        SG_HIGHCONF,
         f"{SG_OUT}/qc_report.tsv",
         f"{SG_OUT}/candidate_select_report.tsv"
 
@@ -135,7 +139,7 @@ rule combineQC_standalone:
         junction=f"{SG_OUT}/junction_qc.tsv"
     output:
         report=f"{SG_OUT}/qc_report.tsv",
-        highconf=f"{SG_OUT}/gated_switch.highconf.fasta",
+        highconf=SG_HIGHCONF,
         flagged=f"{SG_OUT}/gated_switch.flagged.fasta"
     shell:
         "{SG_PYTHON} {SG_SRC}/denovo_qc_combine.py "
