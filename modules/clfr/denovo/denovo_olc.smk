@@ -365,8 +365,8 @@ rule run_denovoOLC_parallel:
         shell(" ".join(command))
 
 
-# Candidate-level shadow scoring is an optional sidecar. It shares this run's
-# OLC candidates and raw read pool but never affects delivery or QC; see
+# Candidate-level shadow scoring uses the frozen module model. It shares this
+# run's OLC candidates and raw read pool but never affects delivery or QC; see
 # denovo_shadow.smk.
 include: config['params']['src_dir'] + "/modules/clfr/denovo/denovo_shadow.smk"
 
@@ -377,7 +377,7 @@ include: config['params']['src_dir'] + "/modules/clfr/denovo/denovo_shadow.smk"
 ## before candidate selection existed as a choice. Opt-in
 ## frag_de_novo.candidate_select: gated_switch switches to the first
 ## k41_rank-ordered candidate passing span_cov_ratio>=0.25 &&
-## placed_reads>=2, falling back to k41_0 otherwise (denovo.md sec 109-112);
+## placed_reads>=5, falling back to k41_0 otherwise (denovo.md sec 123-124);
 ## read denovo_candidate_select.py's module docstring (severe-loss caveat,
 ## sec 116/117/120) before turning it on.
 ## The output filename stays denovo.longest.fasta for every downstream rule
@@ -658,6 +658,7 @@ rule olc_done:
         "denovo/qc_report.tsv",
         "denovo/denovo.longest.highconf.fasta",
         "denovo/library_qc.tsv",
-        "denovo/data_R2_readfilt.dropped.tsv"
+        "denovo/data_R2_readfilt.dropped.tsv",
+        "denovo/shadow/umi_summary.tsv"
     output:
         touch("denovo/done.fq")

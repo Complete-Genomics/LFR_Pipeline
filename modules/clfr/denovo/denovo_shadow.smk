@@ -2,11 +2,14 @@
 
 This module is included by denovo_olc.smk so it scores the exact candidates
 and pre-filter read pool from the production OLC run. Its outputs are never
-inputs to delivery, QC, or olc_done; request denovo/shadow/umi_summary.tsv
-explicitly after setting frag_de_novo.shadow_score_model.
+inputs to delivery, QC, or candidate selection; olc_done records completion of
+the monitoring sidecar.
 """
 
-SHADOW_SCORE_MODEL = config['frag_de_novo'].get('shadow_score_model', '')
+# The frozen candidate-chimera model is a versioned module asset, not a
+# per-run configuration choice. Shadow scoring remains observational only.
+SHADOW_SCORE_MODEL = (config['params']['src_dir'] +
+                      "/modules/clfr/denovo/models/model_candidate_chimera.lgb")
 
 
 ## Per-candidate QC is shared by rule-only gated_switch selection and shadow
@@ -28,7 +31,7 @@ rule junctionQCAllCandidates_olc:
         min_local_span_ratio = qc_setting('min_local_span_ratio'),
         num_processes = config['frag_de_novo']['num_processes'],
         run_parallel = config['frag_de_novo'].get('run_parallel', False),
-        needed = CANDIDATE_SELECT_MODE == 'gated_switch' or bool(SHADOW_SCORE_MODEL)
+        needed = True
     run:
         if not params.run_parallel or not params.needed:
             shell("touch {output}")
@@ -68,7 +71,7 @@ rule shadowScoreChimera_olc:
         model = SHADOW_SCORE_MODEL,
         run_parallel = config['frag_de_novo'].get('run_parallel', False)
     run:
-        if not params.run_parallel or not params.model:
+        if not params.run_parallel:
             shell("mkdir -p denovo/shadow && touch {output.candidates} {output.summary}")
             return
 
