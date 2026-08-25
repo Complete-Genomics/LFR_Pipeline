@@ -14,6 +14,8 @@ rule get_chr_dict:
         "Align/samtools_idx.txt"
     params:
         samtools = config['params'].get('samtools', 'samtools')
+    benchmark:
+        "Benchmarks/consensus_fasta.get_chr_dict.txt"
     shell:
         "{params.samtools} idxstats {input.bam} > {output}"
 
@@ -26,6 +28,8 @@ rule split_consensus_bam:
         bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
     params:
         samtools = config['params'].get('samtools', 'samtools')
+    benchmark:
+        "Benchmarks/consensus_fasta.split_consensus_bam.{id}.{chr}.txt"
     shell:
         "{params.samtools} view -bh {input.bam} {wildcards.chr} > {output.bam} && "
         "{params.samtools} index {output.bam}"
@@ -41,6 +45,8 @@ rule reformat_readid:
         src_dir = config['params']['src_dir'],
         seq_type = SEQUENCE_TYPE, 
         umi_len = config['params']['cbc_len'],
+    benchmark:
+        "Benchmarks/consensus_fasta.reformat_readid.{id}.{chr}.txt"
     run:
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py",
@@ -61,8 +67,12 @@ rule sort_reformated_bam:
         "Align/tmp/{id}_{chr}.name.sort.bam"
     params:
         samtools = config['params'].get('samtools', 'samtools')
+    threads:
+        config['threads'].get('consensus_name_sort', 2)
+    benchmark:
+        "Benchmarks/consensus_fasta.sort_reformated_bam.{id}.{chr}.txt"
     shell:
-        "{params.samtools} sort -@ 2 -n -o {output} {input} "
+        "{params.samtools} sort -@ {threads} -n -o {output} {input} "
 
 # samtools sort -n -o Align/${chr}.name.sort.bam Align/${chr}.name.bam
 
@@ -82,6 +92,8 @@ rule get_consensus_fasta:
         min_reads = config['frag_de_novo']['reads_per_BC'],
         downsample_ratio = config['params'].get('downsample_ratio', 1.0),
         use_samtools_reference = config['params'].get('use_samtools_reference', False)
+    benchmark:
+        "Benchmarks/consensus_fasta.get_consensus_fasta.{id}.{chr}.{split_idx}.txt"
     run:
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta.py",
@@ -110,6 +122,8 @@ rule fix_consensus_format:
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir']
+    benchmark:
+        "Benchmarks/consensus_fasta.fix_consensus_format.{id}.{chr}.{i}.txt"
     shell:
         "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py "
         "--module fix_fasta --input_fasta {input} --output_fasta {output}"
@@ -119,6 +133,8 @@ rule merge_consensus_fasta:
         fa = expand("consensus/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta", id=config['samples']['id'],chr=CHROMS, i=split_cnt),
     output:
         "consensus/consensus.fasta"
+    benchmark:
+        "Benchmarks/consensus_fasta.merge_consensus_fasta.txt"
     shell:
         "cat {input.fa} > {output} "
 
@@ -132,6 +148,8 @@ rule fasta_frag_len_distribution_consensus:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'], 
         minreads_fasta = config['calc_frag']['minreads_fasta'], 
+    benchmark:
+        "Benchmarks/consensus_fasta.fasta_frag_len_distribution.txt"
     run:
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/exon2fasta.py",
@@ -147,11 +165,15 @@ rule map_fasta_consensus:
         "consensus/consensus.fasta"
     output:
         "consensus/consensus.paf"
+    threads:
+        config['threads'].get('consensus_minimap', 20)
     params:
         minimap = config['params']['minimap2'],
-        refgenome = config['params']['ref_fa_mrna']
+        refgenome = config['params'].get('minimap2_mrna_index') or config['params']['ref_fa_mrna']
+    benchmark:
+        "Benchmarks/consensus_fasta.map_fasta_consensus.txt"
     run:
-        command = ["{params.minimap} -x asm20 -t 20 ",
+        command = ["{params.minimap} -x asm20 -t {threads} ",
                    "{params.refgenome} ",
                    "{input} > {output} "
                    ] 
@@ -168,6 +190,8 @@ rule correc_direction_consensus:
         flank_end = config['frag_de_novo']['flank_end'],
         adapter_seq = config['frag_de_novo']['adapter_seq'],
         src_dir = config['params']['src_dir']
+    benchmark:
+        "Benchmarks/consensus_fasta.correc_direction_consensus.txt"
     run:
         if config['params']['correct_rc']==True:
             command = ["{params.python} ",

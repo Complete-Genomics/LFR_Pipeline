@@ -117,6 +117,12 @@ params:
     hisat2_splicesites: "/path/to/splicesites.txt"
     minimap2: "/path/to/minimap2"
     minimap2_anno_bed: "/path/to/anno.bed12"
+    # Optional prebuilt indexes. Build minimap2_index with -x splice:sr and
+    # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
+    minimap2_index: ""
+    minimap2_mrna_index: ""
+    # samtools sort memory limit per sorting/compression thread.
+    minimap_sort_mem: "2G"
 
     # denovo assembly tools (required when modules.frag_de_novo: True)
     megahit: "/path/to/megahit"
@@ -208,6 +214,14 @@ benchmark:
 
 threads:
     bwa: 100
+    # 32-CPU mapping budget: minimap_map + minimap_sort must not exceed
+    # minimap_total. Keep the remaining host CPUs available to the OS/I/O.
+    minimap_total: 32
+    minimap_map: 24
+    minimap_sort: 8
+    consensus_index: 8
+    consensus_name_sort: 2
+    consensus_minimap: 20
     haplotyper: 100
     metrics: 10
     gnu_parallel: 20

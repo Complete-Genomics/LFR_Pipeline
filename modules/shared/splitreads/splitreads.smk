@@ -333,6 +333,8 @@ rule trim_reads:
         bbduk = config['params']['bbduk'],
         sequence_type= config['params']['sequence_type'].lower(),
         adapter_ref = config['params'].get('adapter_ref', '')
+    benchmark:
+        "Benchmarks/consensus_fasta.trim_reads.txt"
     shell:
         """
         ADAPTER_ARGS=""
