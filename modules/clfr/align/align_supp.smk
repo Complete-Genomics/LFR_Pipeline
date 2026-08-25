@@ -7,13 +7,13 @@ rule skip_mark_duplicates:
         tmp = "keep/Align/{id}.sort.markdup.bam",
         bam="Align/{id}.sort.removedup_rm000.bam",
         bai="Align/{id}.sort.removedup_rm000.bam.bai"
-    # benchmark:
-    #     "Benchmarks/calc_frag_len.remove_duplicates.{id}.txt"
     threads:
-        config['threads']['bwa']
+        config['threads'].get('consensus_index', 8)
+    benchmark:
+        "Benchmarks/consensus_fasta.skip_mark_duplicates.{id}.txt"
     run:
         # if config['params']['bc_condition'] == 'random_bc' or config['params']['bc_condition'] == 'random_bc_umi_rc' or config['params']['bc_condition'] == 'pcrfree':
-        shell("cd keep/Align && ln -s data.sort.bam data.sort.markdup.bam && cd ../../Align && ln -s ../keep/Align/data.sort.bam data.sort.removedup_rm000.bam && cd .. && samtools index {output.bam}")        # elif 'standard' in config['params']['bc_condition']:
+        shell("cd keep/Align && ln -s data.sort.bam data.sort.markdup.bam && cd ../../Align && ln -s ../keep/Align/data.sort.bam data.sort.removedup_rm000.bam && cd .. && samtools index -@ {threads} {output.bam}")        # elif 'standard' in config['params']['bc_condition']:
         #     shell("samtools view -b -h -F 0x400 {input}  > {output.bam} && samtools index {output.bam}")
         
 
