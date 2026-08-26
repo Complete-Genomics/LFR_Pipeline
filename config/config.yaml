@@ -166,10 +166,14 @@ calc_frag:
     ylim: 50
 
 frag_de_novo:
-    ## olc or megahit
-    assembler: olc   # megahit | olc (pure-Python OLC, no subprocess fork)
-    assembly_N_umi: 3000    # shadow/smoke cap; empty = denovo all UMIs
+    # olc or megahit
+    assembler: olc   
+    # # shadow/smoke cap; empty = denovo all UMIs
+    assembly_N_umi: 3000    
     run_parallel: False
+    # longest or gated_switch
+    candidate_select: longest
+    gated_switch_min_placed_reads: 5
     reads_per_BC: 50
     margin: 5
     spades: "/path/to/spades.py"
