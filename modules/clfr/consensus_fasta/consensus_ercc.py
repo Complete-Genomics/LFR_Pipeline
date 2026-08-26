@@ -53,6 +53,12 @@ def parse_args():
         action="store_true",
         help="Include all ERCC truth entries with zero barcode count; by default plot only ERCC IDs present in the consensus FASTA.",
     )
+    parser.add_argument(
+        "--tier_plots",
+        action="store_true",
+        help="Also split ERCC IDs into low/mid/high concentration tertiles (cutoffs from the full "
+             "truth table) and fit/plot each tier separately, to check whether fit quality varies by abundance.",
+    )
     return parser.parse_args()
 
 
@@ -248,6 +254,21 @@ def read_ercc_concentrations(path):
     return concentrations
 
 
+def read_ercc_subgroups(path):
+    """ERCC ID -> subgroup letter (A/B/C/D) from the truth table, for plot coloring."""
+    subgroups = {}
+    with open(path) as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if "ERCC ID" not in reader.fieldnames or "subgroup" not in reader.fieldnames:
+            return subgroups
+        for row in reader:
+            ercc_id = row["ERCC ID"].strip()
+            subgroup = row["subgroup"].strip()
+            if ercc_id and subgroup:
+                subgroups[ercc_id] = subgroup
+    return subgroups
+
+
 def barcode_from_consensus_id(consensus_id, ercc_id):
     marker = "_" + ercc_id
     if marker in consensus_id:
@@ -343,6 +364,7 @@ def barcode_vs_concentration(barcodes_by_ercc, ercc_ref_path, output_prefix, inc
     concentration range.
     """
     concentrations = read_ercc_concentrations(ercc_ref_path)
+    subgroups = read_ercc_subgroups(ercc_ref_path)
     ercc_ids = set(concentrations) if include_unobserved else set(barcodes_by_ercc)
 
     rows = []
@@ -351,6 +373,7 @@ def barcode_vs_concentration(barcodes_by_ercc, ercc_ref_path, output_prefix, inc
             continue
         rows.append({
             "ercc_id": ercc_id,
+            "subgroup": subgroups.get(ercc_id, ""),
             "concentration_mix1_attomoles_ul": concentrations[ercc_id],
             "assembled_barcode_count": len(barcodes_by_ercc.get(ercc_id, set())),
         })
@@ -373,13 +396,118 @@ def barcode_vs_concentration(barcodes_by_ercc, ercc_ref_path, output_prefix, inc
 
     write_table(
         "%s.tsv" % output_prefix, rows,
-        ["ercc_id", "concentration_mix1_attomoles_ul", "assembled_barcode_count"],
+        ["ercc_id", "subgroup", "concentration_mix1_attomoles_ul", "assembled_barcode_count"],
     )
     write_table(
         "%s_correlation.tsv" % output_prefix, [stats_row],
         ["n", "pearson_log2_mix1", "spearman_log2_mix1", "r_squared_log2_mix1", "slope_log2_mix1", "intercept_log2_mix1"],
     )
     return rows, stats_row
+
+
+def assign_concentration_tiers(rows, ercc_ref_path):
+    """Low/mid/high tertile per ERCC ID, using the full truth table (all subgroups span the
+    same abundance range, so tier cutoffs must come from all 92 IDs, not just the observed rows,
+    to keep tiers comparable across datasets/runs)."""
+    concentrations = read_ercc_concentrations(ercc_ref_path)
+    values = sorted(concentrations.values())
+    n = len(values)
+    cut1 = values[n // 3]
+    cut2 = values[(2 * n) // 3]
+
+    tiers = {}
+    for row in rows:
+        conc = row["concentration_mix1_attomoles_ul"]
+        if conc <= cut1:
+            tier = "low"
+        elif conc <= cut2:
+            tier = "mid"
+        else:
+            tier = "high"
+        tiers[row["ercc_id"]] = tier
+    return tiers, (cut1, cut2)
+
+
+def plot_barcode_vs_concentration_tiers(rows, ercc_ref_path, output_prefix):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    tiers, (cut1, cut2) = assign_concentration_tiers(rows, ercc_ref_path)
+    tier_labels = {
+        "low": "Low (<= %.1f attomoles/uL)" % cut1,
+        "mid": "Mid (%.1f - %.1f attomoles/uL)" % (cut1, cut2),
+        "high": "High (> %.1f attomoles/uL)" % cut2,
+    }
+    subgroup_colors = {"A": "#1f77b4", "B": "#2ca02c", "C": "#ff7f0e", "D": "#d62728"}
+
+    stats_rows = []
+    for tier in ("low", "mid", "high"):
+        tier_rows = [row for row in rows if tiers.get(row["ercc_id"]) == tier]
+        xs = [log2p1(row["concentration_mix1_attomoles_ul"]) for row in tier_rows]
+        ys = [log2p1(row["assembled_barcode_count"]) for row in tier_rows]
+        pearson = pearson_corr(xs, ys)
+        spearman = spearman_corr(xs, ys)
+        slope, intercept = linear_fit(xs, ys)
+        r_squared = pearson ** 2 if not math.isnan(pearson) else float("nan")
+
+        stats_rows.append({
+            "tier": tier,
+            "n": len(tier_rows),
+            "pearson_log2_mix1": pearson,
+            "spearman_log2_mix1": spearman,
+            "r_squared_log2_mix1": r_squared,
+            "slope_log2_mix1": slope,
+            "intercept_log2_mix1": intercept,
+        })
+
+        figure, axis = plt.subplots(figsize=(7, 6))
+        subgroups_present = sorted({row.get("subgroup") for row in tier_rows if row.get("subgroup")})
+        if subgroups_present:
+            for subgroup in subgroups_present:
+                idx = [i for i, row in enumerate(tier_rows) if row.get("subgroup") == subgroup]
+                axis.scatter(
+                    [xs[i] for i in idx], [ys[i] for i in idx],
+                    label="subgroup %s" % subgroup,
+                    color=subgroup_colors.get(subgroup, "#7f7f7f"),
+                    s=60, alpha=0.8, edgecolors="k", linewidths=0.4,
+                )
+            axis.legend(frameon=False, loc="lower right", fontsize=9)
+        else:
+            axis.scatter(xs, ys, color="#0072B2", edgecolors="white", linewidths=0.5, alpha=0.85)
+
+        if xs and not math.isnan(slope) and not math.isnan(intercept):
+            x_min, x_max = min(xs), max(xs)
+            axis.plot(
+                [x_min, x_max],
+                [slope * x_min + intercept, slope * x_max + intercept],
+                color="#D55E00", linewidth=1.5,
+            )
+
+        axis.set_title("ERCC Consensus Barcode Yield - %s" % tier_labels[tier])
+        axis.set_xlabel("Mix 1 concentration: log2(attomoles/uL + 1)")
+        axis.set_ylabel("Consensus barcodes: log2(count + 1)")
+        axis.grid(axis="both", alpha=0.25)
+        axis.text(
+            0.03, 0.97,
+            "n=%d\nPearson r=%.3f\nSpearman rho=%.3f\nR2=%.3f" % (
+                len(tier_rows),
+                pearson if not math.isnan(pearson) else float("nan"),
+                spearman if not math.isnan(spearman) else float("nan"),
+                r_squared if not math.isnan(r_squared) else float("nan"),
+            ),
+            transform=axis.transAxes, verticalalignment="top",
+        )
+        figure.tight_layout()
+        figure.savefig("%s_tier_%s.png" % (output_prefix, tier), dpi=180)
+        plt.close(figure)
+
+    write_table(
+        "%s_tier_correlation.tsv" % output_prefix, stats_rows,
+        ["tier", "n", "pearson_log2_mix1", "spearman_log2_mix1", "r_squared_log2_mix1", "slope_log2_mix1", "intercept_log2_mix1"],
+    )
+    return stats_rows
 
 
 def plot_barcode_vs_concentration(rows, stats_row, output_path, fasta_stats):
@@ -395,7 +523,30 @@ def plot_barcode_vs_concentration(rows, stats_row, output_path, fasta_stats):
     xs = [log2p1(row["concentration_mix1_attomoles_ul"]) for row in rows]
     ys = [log2p1(row["assembled_barcode_count"]) for row in rows]
     figure, axis = plt.subplots(figsize=(8, 6))
-    axis.scatter(xs, ys, color="#0072B2", edgecolors="white", linewidths=0.5, alpha=0.85)
+
+    subgroup_colors = {
+        "A": "#1f77b4",
+        "B": "#2ca02c",
+        "C": "#ff7f0e",
+        "D": "#d62728",
+    }
+    subgroups_present = sorted({row.get("subgroup") for row in rows if row.get("subgroup")})
+    if subgroups_present:
+        for subgroup in subgroups_present:
+            idx = [i for i, row in enumerate(rows) if row.get("subgroup") == subgroup]
+            axis.scatter(
+                [xs[i] for i in idx],
+                [ys[i] for i in idx],
+                label="subgroup %s" % subgroup,
+                color=subgroup_colors.get(subgroup, "#7f7f7f"),
+                s=46,
+                alpha=0.78,
+                edgecolors="k",
+                linewidths=0.4,
+            )
+        axis.legend(frameon=False, loc="lower right", fontsize=9)
+    else:
+        axis.scatter(xs, ys, color="#0072B2", edgecolors="white", linewidths=0.5, alpha=0.85)
 
     slope = stats_row["slope_log2_mix1"]
     intercept = stats_row["intercept_log2_mix1"]
@@ -587,6 +738,16 @@ def main():
             corr_stats["pearson_log2_mix1"], corr_stats["r_squared_log2_mix1"], corr_stats["n"],
         )
     )
+
+    if args.tier_plots:
+        tier_stats = plot_barcode_vs_concentration_tiers(barcode_rows, ercc_ref, args.barcode_vs_concentration)
+        for row in tier_stats:
+            sys.stderr.write(
+                "  tier=%-4s n=%-3s Pearson r=%.3f R2=%.3f -> %s_tier_%s.png\n" % (
+                    row["tier"], row["n"], row["pearson_log2_mix1"], row["r_squared_log2_mix1"],
+                    args.barcode_vs_concentration, row["tier"],
+                )
+            )
 
 
 if __name__ == "__main__":
