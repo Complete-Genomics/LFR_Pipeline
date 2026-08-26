@@ -12,7 +12,7 @@ The stLFR/cLFR technology co-barcodes short reads from the same long DNA fragmen
 
 ### De novo assembly tuned for per-UMI reconstruction (`modules/clfr/denovo/`)
 
-Each cLFR UMI barcodes the reads from a single short DNA fragment — a different regime from genome-scale assembly, built around single-end 600bp (SE600) reads rather than paired-end. `denovo_seed_olc.py` implements a lightweight greedy Overlap-Layout-Consensus (OLC) assembler for this regime, replacing a prior de Bruijn graph (megahit, k=41) approach. Full design at [denovo_OLC](https://github.com/Complete-Genomics/denovo_OLC); highlights:
+Each cLFR UMI barcodes the reads from a single short DNA fragment — a different regime from genome-scale assembly, built around single-end 600bp (SE600) reads rather than paired-end. `denovo_seed_olc.py` implements a lightweight greedy Overlap-Layout-Consensus (OLC) assembler for this regime, replacing a prior de Bruijn graph (megahit, k=41) approach. Full design at [cLFR_denovo_OLC](https://github.com/Complete-Genomics/cLFR_denovo_OLC); highlights:
 
 - **OLC over de Bruijn graph for this problem shape** — no fixed graph-construction cost to amortize at the single- to low-double-digit read depths typical per UMI, and degrades gracefully down to a single read (→ a contig, if it clears the length floor), where a de Bruijn graph has no redundancy to work with at all.
 - **Tuned for 16S/SE600-specific noise** — internal-anchor and collective pileup-rescue fallbacks recover overlaps that conserved primer regions, PCR-chimera artifacts, and combined independent read errors would otherwise block. Validated against a mock community with fully known reference sequences: 95.4–97.1% mean identity depending on QC preset, measured directly against the true references.
@@ -22,10 +22,11 @@ Each cLFR UMI barcodes the reads from a single short DNA fragment — a differen
 
 ### Reference-guided consensus for mRNA isoform analysis (`modules/clfr/consensus_fasta/`)
 
-When a reference is available (e.g. a known species or transcriptome), `consensus_fasta.py` builds a per-UMI consensus by aligning each fragment's reads to the reference and calling a position-level pileup consensus (via `samtools consensus`), instead of assembling from scratch (Released standalone as [consensus_fasta](https://github.com/Complete-Genomics/cLFR_Release)):
+When a reference is available (e.g. a known species or transcriptome), `consensus_fasta.py` builds a per-UMI consensus by aligning each fragment's reads to the reference and calling a position-level pileup consensus (via `samtools consensus`), instead of assembling from scratch (Released standalone as [cLFR_Release](https://github.com/Complete-Genomics/cLFR_Release)). An optional, separate post-consensus variant-polishing workflow is available as [cLFR_SNVpolish](https://github.com/Complete-Genomics/cLFR_SNVpolish):
 
 - **Faster than de novo assembly whenever a reference exists** — alignment plus pileup skips graph/overlap construction entirely, since the reference already supplies the structure.
 - **Still preserves real SNVs relative to the reference** — the consensus is called from each fragment's own read pileup, not substituted with reference sequence, so sample-specific variants aren't silently lost.
+- **UMI-aware SNV polish** — because SE600 uses a standard, non-UMI-aware alignment, `cLFR_SNVpolish` can re-score consensus-versus-reference SNPs using independent-molecule support, within-molecule agreement, and read mapping/quality features. A LightGBM classifier learns true-versus-error probabilities from GIAB-labeled HG002/HG004 sites and is evaluated with chromosome-held-out splits; the DNA-trained model should be recalibrated on ERCC data before RNA/isoform use.
 
 
 ## Directory Structure
