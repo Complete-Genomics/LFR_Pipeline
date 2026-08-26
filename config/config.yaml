@@ -33,6 +33,9 @@ modules:
     # cLFR-specific modules
     exon2fasta: False
     consensus_fasta: False
+    # Shadow-only resource recommendations from completed benchmark history.
+    # It never changes rule threads, memory, or runtime requests.
+    resource_allocation: False
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###
@@ -195,6 +198,21 @@ frag_de_novo:
 
 umi:
     umi_pos_strand_batch: ""
+
+# Build history with resource_allocation.py collect from benchmark files and a
+# task manifest. Candidates are pre-submit rows with stable task_key, rule,
+# input_size_bytes, static_memory_gb, and static_runtime_min. Leave disabled
+# until history spans multiple independent runs; unknown/OOD rows fall back to
+# their static request.
+resource_allocation:
+    history: ""
+    candidates: ""
+    shadow_output: "resource_allocation/shadow.tsv"
+    quantile: 0.95
+    memory_margin: 1.30
+    runtime_margin: 1.25
+    min_rule_samples: 20
+    min_bucket_samples: 10
 
 # vc_polish (canary, modules.vc_polish must be True): molecule-linkage confidence
 # re-scoring of called SNPs (cLFR_eval Claim A model). model/editing_bed empty ->

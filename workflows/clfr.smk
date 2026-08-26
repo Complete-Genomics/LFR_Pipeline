@@ -121,6 +121,13 @@ def run_all_input(wildcards):
         run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.pdf",'consensus/consensus.fixRC.fasta'])
         # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
 
+    if config['modules'].get('resource_allocation', False):
+        run_all_files.append(
+            config.get('resource_allocation', {}).get(
+                'shadow_output', 'resource_allocation/shadow.tsv'
+            )
+        )
+
     # RNA_16S_MODE = config['modules'].get('rna_16s', 'align_ref')
     # if RNA_16S_MODE == 'meta_denovo':
     #     run_all_files.extend(["rna_16s/meta_denovo/contigs.fasta", "rna_16s/quast/meta_denovo/report.txt", "rna_16s/abundance_meta_denovo.txt"])
@@ -155,6 +162,7 @@ include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 if config['modules'].get('vc_polish', False):
     include: src_dir+"modules/clfr/vc_polish/vc_polish.smk"
 include: src_dir+"modules/clfr/consensus_fasta/consensus_fasta.smk"
+include: src_dir+"modules/shared/resource_allocation/resource_allocation.smk"
 # include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
 # include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
 include: src_dir+"modules/clfr/denovo/denovo_preprocess.smk"
