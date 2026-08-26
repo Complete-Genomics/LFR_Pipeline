@@ -36,6 +36,10 @@ modules:
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###
+    # canary: molecule-linkage SNP confidence re-scoring, downstream of variant_calling.
+    # Produces an ADDITIONAL polished VCF alongside the primary GATK output -- does not
+    # replace or gate anything else. Off by default; requires variant_calling: True.
+    vc_polish: False
 
     mate_pair_analysis: False
     read_overlap_analysis: False
@@ -186,6 +190,14 @@ frag_de_novo:
 umi:
     umi_pos_strand_batch: ""
 
+# vc_polish (canary, modules.vc_polish must be True): molecule-linkage confidence
+# re-scoring of called SNPs (cLFR_eval Claim A model). model/editing_bed empty ->
+# vc_polish.smk falls back to the model shipped in modules/clfr/vc_polish/models/.
+vc_polish:
+    model: ""       # override to point at a different model.txt; "" = use the shipped default
+    threshold: 0.5  # KEEP if p_true >= threshold, else REVERT
+    editing_bed: ""  # optional REDIportal-style BED of RNA-editing sites (A>G/T>C never reverted)
+
 benchmark:
     benchmark_snp: "/path/to/hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"
     benchmark_indel: "/path/to/hg38_GIAB_HG001/benchmark_indel.chrfix.vcf.gz"
@@ -203,3 +215,4 @@ threads:
     split_group: 80
     quast: 4
     supernova: 100
+    vc_polish: 4

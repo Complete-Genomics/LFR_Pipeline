@@ -76,6 +76,11 @@ def run_all_input(wildcards):
     if config['modules']['variant_calling']:
         run_all_files.append("Make_Vcf/step1_haplotyper/{}_gatk.vcf".format(config['samples']['id']))
 
+    # vc_polish: canary, additive-only -- adds a polished-VCF target, does not
+    # touch the primary GATK output above.
+    if config['modules'].get('vc_polish', False):
+        run_all_files.append("Make_Vcf/vc_polish/{}.polished.pass.vcf".format(config['samples']['id']))
+
     # if benchmarking is set add benchmark summaries
     if config['modules']['benchmarking']:
         run_all_files.append("Make_Vcf/step2_benchmarking/snp_compare/summary.txt")
@@ -147,6 +152,8 @@ else:
     include: src_dir+"modules/clfr/align/align.main.smk"
 include: src_dir+"modules/shared/splitreads/splitreads.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
+if config['modules'].get('vc_polish', False):
+    include: src_dir+"modules/clfr/vc_polish/vc_polish.smk"
 include: src_dir+"modules/clfr/consensus_fasta/consensus_fasta.smk"
 # include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
 # include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
