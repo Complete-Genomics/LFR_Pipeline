@@ -10,7 +10,7 @@
 #   raw_r2              required data_R2_sorted.tsv (or noisy-preprocessed TSV)
 #   filtered_r2         optional read-filtered TSV; defaults to raw_r2
 #   outdir              default directory containing contigs
-#   highconf            default <outdir>/final_contigs_highconf.fa
+#   denovo.longest.highconf.fasta            default <outdir>/final_contigs_denovo.longest.highconf.fasta.fa
 #   python              default current Python executable
 #   vsearch             default "vsearch"
 #   num_processes       default 4
@@ -39,7 +39,7 @@ SG_RAW_R2 = sg_required("raw_r2")
 # run read-back QC against the same sorted pool used by the candidate QC.
 SG_FILTERED_R2 = SG.get("filtered_r2") or SG_RAW_R2
 SG_OUT = SG.get("outdir", str(Path(SG_CONTIGS).parent))
-SG_HIGHCONF = SG.get("highconf", f"{SG_OUT}/final_contigs_highconf.fa")
+SG_denovo.longest.highconf.fasta = SG.get("denovo.longest.highconf.fasta", f"{SG_OUT}/final_contigs_denovo.longest.highconf.fasta.fa")
 SG_PYTHON = SG.get("python", sys.executable)
 SG_VSEARCH = SG.get("vsearch", "vsearch")
 SG_NPROC = SG.get("num_processes", 4)
@@ -52,7 +52,7 @@ SG_SRC = str(Path(workflow.basedir).resolve())
 
 rule standalone_gated_switch_all:
     input:
-        SG_HIGHCONF,
+        SG_denovo.longest.highconf.fasta,
         f"{SG_OUT}/qc_report.tsv",
         f"{SG_OUT}/candidate_select_report.tsv"
 
@@ -139,11 +139,11 @@ rule combineQC_standalone:
         junction=f"{SG_OUT}/junction_qc.tsv"
     output:
         report=f"{SG_OUT}/qc_report.tsv",
-        highconf=SG_HIGHCONF,
+        denovo.longest.highconf.fasta=SG_denovo.longest.highconf.fasta,
         flagged=f"{SG_OUT}/gated_switch.flagged.fasta"
     shell:
         "{SG_PYTHON} {SG_SRC}/denovo_qc_combine.py "
         "--contigs {input.contigs} --readback {input.readback} "
         "--uchimeout {input.uchime} --junction {input.junction} "
-        "--out-report {output.report} --out-highconf-fasta {output.highconf} "
+        "--out-report {output.report} --out-denovo.longest.highconf.fasta-fasta {output.denovo.longest.highconf.fasta} "
         "--out-flagged-fasta {output.flagged}"
