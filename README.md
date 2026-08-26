@@ -121,6 +121,8 @@ flowchart TD
         met["metrics\nAlignment metrics\nsummary_report.txt"]
         vc["variant_calling\nGATK haplotyper\ngatk.vcf"]
         bench["variant_calling\nBenchmark SNP / indel"]
+        allocdata["Completed benchmarks +\npre-submit task manifest"]
+        alloc["resource_allocation\nRule-stratified conservative\nshadow.tsv"]
     end
 
     subgraph CL["modules / clfr"]
@@ -142,9 +144,13 @@ flowchart TD
     supp -.-> denovo
     map -.-> vc
     vc -.-> bench
+    map -.->|completed benchmark| allocdata
+    consensus -.->|completed benchmark| allocdata
+    denovo -.->|completed benchmark| allocdata
+    allocdata -.->|shadow-only input| alloc
 
     classDef opt fill:#dce8f5,stroke:#6ca3c8,color:#1a3a5c
-    class exon,frag,consensus,rna,denovo,vc,bench opt
+    class exon,frag,consensus,rna,denovo,vc,bench,alloc opt
 ```
 
 ## Installation
