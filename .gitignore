@@ -24,3 +24,4 @@ modules/clfr/denovo/models/
 modules/clfr/denovo/test/
 modules/clfr/denovo/counterfactual/
 .snakemake/
+modules/clfr/denovo/salvage/README.md
