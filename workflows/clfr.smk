@@ -154,7 +154,10 @@ include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
 if mrna_mapper =='minimap2':
-    include: src_dir+"modules/clfr/align/align.minimap.smk"
+    if config['params'].get('minimap_parallel_split', False):
+        include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
+    else:
+        include: src_dir+"modules/clfr/align/align.minimap.smk"
 else:
     include: src_dir+"modules/clfr/align/align.main.smk"
 include: src_dir+"modules/shared/splitreads/splitreads.smk"

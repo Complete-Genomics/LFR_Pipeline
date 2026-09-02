@@ -11,3 +11,4 @@ modules/clfr/denovo/test/
 subprojects/
 modules/clfr/denovo/salvage/
 .snakemake/
+README_CN.md
