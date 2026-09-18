@@ -396,6 +396,26 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' read count {len(reads_list_obj)} < {MIN_READS}, skipping.\n")
         return None
 
+    # Guard against barcode collisions: unrelated molecules sharing the same
+    # UMI by chance can scatter reads across tens of megabases. Feeding that
+    # into StringTie with no bundling limit can hang for minutes on a single
+    # UMI group. A real fragment can't exceed MAX_FRAG_LEN, so reject anything
+    # far beyond that before ever calling StringTie.
+    UMI_SPAN_SANITY_LIMIT = MAX_FRAG_LEN * 5
+    umi_positions = [
+        read.reference_start for read in reads_list_obj
+        if read.reference_start is not None and read.reference_start >= 0
+    ]
+    if umi_positions:
+        umi_span = max(umi_positions) - min(umi_positions)
+        if umi_span > UMI_SPAN_SANITY_LIMIT:
+            sys.stderr.write(
+                f"WARNING: UMI ID '{umi_id}' reads span {umi_span}bp "
+                f"(> {UMI_SPAN_SANITY_LIMIT}bp sanity limit) - likely barcode "
+                f"collision, skipping.\n"
+            )
+            return None
+
     # Downsample reads if ratio < 1.0
     if DOWNSAMPLE_RATIO < 1.0 and len(reads_list_obj) > 1:
         target_count = max(1, int(len(reads_list_obj) * DOWNSAMPLE_RATIO))
