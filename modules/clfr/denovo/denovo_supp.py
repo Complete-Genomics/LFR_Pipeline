@@ -387,7 +387,17 @@ def metrics_olc(fasta, outdir):
     sns.set_style("whitegrid")
     _fig = sns.distplot(assembly_len_filtered,bins=50,kde=True)
     plt.title(f"frag_length_distribution")
-    plt.savefig( f"{outdir}/frag_length_distribution.pdf")
+    _fig.text(
+        0.98, 0.98,
+        f"count={frag_cnt}\nmean={mean(assembly_len_filtered):.4f}\n"
+        f"median={median(assembly_len_filtered)}\n"
+        f"min={min(assembly_len_filtered)}\nmax={max(assembly_len_filtered)}",
+        transform=_fig.transAxes,
+        ha="right",
+        va="top",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+    )
+    plt.savefig( f"{outdir}/frag_length_distribution.png")
     plt.clf()
     plt.close()
 
@@ -823,5 +833,4 @@ if __name__ == "__main__":
 
     else:
         print('input a correct module')
-
 
