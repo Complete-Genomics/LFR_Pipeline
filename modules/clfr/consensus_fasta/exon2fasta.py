@@ -620,10 +620,20 @@ def metrics_basic(fasta, outdir, cutoff, name):
     plt.figure(figsize=(15, 8))
     plt.hist(assembly_len_filtered, bins=50)
     plt.grid(axis="y", alpha=0.3)
-    plt.title(f"{name}_frag_length_distribution_N{cutoff}")
+    plt.title(f"{name}_frag_length_distribution_count{cutoff}")
     plt.xlabel("Fragment length")
     plt.ylabel("Count")
-    plt.savefig( f"{outdir}/{name}_frag_length_distribution.pdf")
+    plt.gca().text(
+        0.98, 0.98,
+        f"count={len(assembly_len)}\nmean={mean(assembly_len):.4f}\n"
+        f"median={median(assembly_len)}\nmin={min(assembly_len)}\n"
+        f"max={max(assembly_len)}",
+        transform=plt.gca().transAxes,
+        ha="right",
+        va="top",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+    )
+    plt.savefig( f"{outdir}/{name}_frag_length_distribution.png")
     plt.clf()
     # print(f'count {len(assembly_len)} frag')
     # print(f'mean={round(mean(assembly_len),4)}, median={median(assembly_len)}')
@@ -756,4 +766,3 @@ if __name__ == "__main__":
         run_per_base_density_bc(chrom, bc)
     else:
         print('no module')
-
