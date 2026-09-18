@@ -118,7 +118,7 @@ def run_all_input(wildcards):
     #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
 
     if config['modules']['consensus_fasta'] == True:
-        run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.pdf",'consensus/consensus.fixRC.fasta'])
+        run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.png",'consensus/consensus.fixRC.fasta'])
         # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
 
     if config['modules'].get('resource_allocation', False):
