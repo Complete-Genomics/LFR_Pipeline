@@ -616,10 +616,9 @@ def metrics_basic(fasta, outdir, cutoff, name):
             f.write(f'min={min(assembly_len)}, max={max(assembly_len)}\n')
     except Exception as e: print(e)
     
-    # Plot fragment length distribution without depending on seaborn runtime APIs.
-    plt.figure(figsize=(15, 8))
-    plt.hist(assembly_len_filtered, bins=50)
-    plt.grid(axis="y", alpha=0.3)
+    sns.set(rc={'figure.figsize': (15, 8)})
+    sns.set_style("whitegrid")
+    sns.distplot(assembly_len_filtered, bins=50, kde=True)
     plt.title(f"{name}_frag_length_distribution_count{cutoff}")
     plt.xlabel("Fragment length")
     plt.ylabel("Count")
