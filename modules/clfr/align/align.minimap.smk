@@ -32,14 +32,14 @@ rule map_reads_minimap:
         #log=Align/minimap2.log
         #tmp_prefix=/dev/shm/minimap_tmp
         
-        SORT_TMP=/dev/shm/minimap_tmp_$$
+        SORT_TMP=Align/minimap_tmp_$$
         echo "minimap2 samtools sort tmp: $SORT_TMP" >&2
         mkdir -p $SORT_TMP
 
 
         # ============ 2. minimap2 mapping ============
         {params.MINIMAP} -ax splice:sr \
-            -t 15 \
+            -t 20 \
             --secondary=no \
             --sam-hit-only \
             --junc-bed {params.anno_bed} \

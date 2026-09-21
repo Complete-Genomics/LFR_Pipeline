@@ -25,7 +25,7 @@ rule select_denovo_barcodes:
         """
         mkdir -p denovo
         awk -F '\\t' -v cutoff={params.reads_per_BC} \
-            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff {{print "BX:Z:" $3}}' \
+            'NR > 4 && NF >= 3 && $2 + 0 >= cutoff && $2 + 0 <= 10000 && $3 !~ /N/ {{print "BX:Z:" $3}}' \
             {input} > {output}
         """
 
