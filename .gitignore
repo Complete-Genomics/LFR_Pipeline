@@ -7,5 +7,8 @@ test/
 data/
 config/
 resources/
-modules/clfr/denovo/data_R2_sgrap.tsv
-modules/clfr/denovo/compare_seedext_to_megahit.py
+modules/clfr/denovo/test/
+subprojects/
+modules/clfr/denovo/salvage/
+.snakemake/
+README_CN.md

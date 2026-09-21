@@ -33,9 +33,16 @@ modules:
     # cLFR-specific modules
     exon2fasta: False
     consensus_fasta: False
+    # Shadow-only resource recommendations from completed benchmark history.
+    # It never changes rule threads, memory, or runtime requests.
+    resource_allocation: False
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###
+    # canary: molecule-linkage SNP confidence re-scoring, downstream of variant_calling.
+    # Produces an ADDITIONAL polished VCF alongside the primary GATK output -- does not
+    # replace or gate anything else. Off by default; requires variant_calling: True.
+    vc_polish: False
 
     mate_pair_analysis: False
     read_overlap_analysis: False
@@ -113,13 +120,21 @@ params:
     hisat2_splicesites: "/path/to/splicesites.txt"
     minimap2: "/path/to/minimap2"
     minimap2_anno_bed: "/path/to/anno.bed12"
+    # Optional prebuilt indexes. Build minimap2_index with -x splice:sr and
+    # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
+    minimap2_index: ""
+    minimap2_mrna_index: ""
+    # samtools sort memory limit per sorting/compression thread.
+    minimap_sort_mem: "2G"
 
     # denovo assembly tools (required when modules.frag_de_novo: True)
     megahit: "/path/to/megahit"
     bbduk: "/path/to/bbduk.sh"
     bgzip: "/path/to/bgzip"
-    adapter_ref: "config/adapters/mgi_dnbseq_adapters.fa"
-
+    # reference-free chimera detection for OLC post-assembly QC (no curated
+    # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
+    # chimeraQC_olc/combineQC_olc and denovo.md sec 26/29)
+    vsearch: "/path/to/vsearch"
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
     featurecounts: "/path/to/featureCounts"
     ercc_gtf: "/path/to/ERCC92.gtf"
@@ -158,10 +173,13 @@ calc_frag:
     ylim: 50
 
 frag_de_novo:
+    ## olc or megahit
+    assembler: olc   # megahit | olc (pure-Python OLC, no subprocess fork)
+    assembly_N_umi: 1000    # empty = denovo all UMIs; set an int to cap for debug/smoke test
     run_parallel: False
     reads_per_BC: 50
     margin: 5
-    denovo_assembler: "/path/to/spades.py"
+    spades: "/path/to/spades.py"
     spades_phred_offset: 55
     quast_dir: "/path/to/quast.py"
     quast_min_contig: 100
@@ -177,10 +195,32 @@ frag_de_novo:
     adapter_seq: "CTCAGCAGAGGG"
     min_ctg_len: 400
     num_processes: 20
-    assembly_N_umi: 1000
 
 umi:
     umi_pos_strand_batch: ""
+
+# Build history with resource_allocation.py collect from benchmark files and a
+# task manifest. Candidates are pre-submit rows with stable task_key, rule,
+# input_size_bytes, static_memory_gb, and static_runtime_min. Leave disabled
+# until history spans multiple independent runs; unknown/OOD rows fall back to
+# their static request.
+resource_allocation:
+    history: ""
+    candidates: ""
+    shadow_output: "resource_allocation/shadow.tsv"
+    quantile: 0.95
+    memory_margin: 1.30
+    runtime_margin: 1.25
+    min_rule_samples: 20
+    min_bucket_samples: 10
+
+# vc_polish (canary, modules.vc_polish must be True): molecule-linkage confidence
+# re-scoring of called SNPs (cLFR_eval Claim A model). model/editing_bed empty ->
+# vc_polish.smk falls back to the model shipped in modules/clfr/vc_polish/models/.
+vc_polish:
+    model: ""       # override to point at a different model.txt; "" = use the shipped default
+    threshold: 0.5  # KEEP if p_true >= threshold, else REVERT
+    editing_bed: ""  # optional REDIportal-style BED of RNA-editing sites (A>G/T>C never reverted)
 
 benchmark:
     benchmark_snp: "/path/to/hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"
@@ -193,6 +233,14 @@ benchmark:
 
 threads:
     bwa: 100
+    # 32-CPU mapping budget: minimap_map + minimap_sort must not exceed
+    # minimap_total. Keep the remaining host CPUs available to the OS/I/O.
+    minimap_total: 32
+    minimap_map: 24
+    minimap_sort: 8
+    consensus_index: 8
+    consensus_name_sort: 2
+    consensus_minimap: 20
     haplotyper: 100
     metrics: 10
     gnu_parallel: 20
@@ -200,3 +248,4 @@ threads:
     split_group: 80
     quast: 4
     supernova: 100
+    vc_polish: 4

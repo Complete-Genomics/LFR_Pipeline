@@ -76,6 +76,11 @@ def run_all_input(wildcards):
     if config['modules']['variant_calling']:
         run_all_files.append("Make_Vcf/step1_haplotyper/{}_gatk.vcf".format(config['samples']['id']))
 
+    # vc_polish: canary, additive-only -- adds a polished-VCF target, does not
+    # touch the primary GATK output above.
+    if config['modules'].get('vc_polish', False):
+        run_all_files.append("Make_Vcf/vc_polish/{}.polished.pass.vcf".format(config['samples']['id']))
+
     # if benchmarking is set add benchmark summaries
     if config['modules']['benchmarking']:
         run_all_files.append("Make_Vcf/step2_benchmarking/snp_compare/summary.txt")
@@ -107,7 +112,7 @@ def run_all_input(wildcards):
         if config['frag_de_novo'].get('run_parallel', False):
             run_all_files.extend(["denovo/done.fq"])
         else:
-            run_all_files.extend(["denovo/data_R1_sgrep.tsv", "denovo/data_R2_sgrep.tsv"])
+            run_all_files.extend(["denovo/data_R1_sorted.tsv", "denovo/data_R2_sorted.tsv"])
 
     # if config['modules']['exon2fasta'] == True:
     #     run_all_files.extend(["Align/frag_coverage_done", "Align/frag_length_distribution_N100.pdf"])
@@ -115,6 +120,13 @@ def run_all_input(wildcards):
     if config['modules']['consensus_fasta'] == True:
         run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.png",'consensus/consensus.fixRC.fasta'])
         # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
+
+    if config['modules'].get('resource_allocation', False):
+        run_all_files.append(
+            config.get('resource_allocation', {}).get(
+                'shadow_output', 'resource_allocation/shadow.tsv'
+            )
+        )
 
     # RNA_16S_MODE = config['modules'].get('rna_16s', 'align_ref')
     # if RNA_16S_MODE == 'meta_denovo':
@@ -142,12 +154,23 @@ include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
 if mrna_mapper =='minimap2':
-    include: src_dir+"modules/clfr/align/align.minimap.smk"
+    if config['params'].get('minimap_parallel_split', False):
+        include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
+    else:
+        include: src_dir+"modules/clfr/align/align.minimap.smk"
 else:
     include: src_dir+"modules/clfr/align/align.main.smk"
 include: src_dir+"modules/shared/splitreads/splitreads.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
+if config['modules'].get('vc_polish', False):
+    include: src_dir+"modules/clfr/vc_polish/vc_polish.smk"
 include: src_dir+"modules/clfr/consensus_fasta/consensus_fasta.smk"
+include: src_dir+"modules/shared/resource_allocation/resource_allocation.smk"
 # include: src_dir+"modules/clfr/exon2fasta/exon2fasta.smk"
 # include: src_dir+"modules/clfr/rna_16s/rna_16s.smk"
-include: src_dir+"modules/clfr/denovo/denovo_clfr.smk"
+include: src_dir+"modules/clfr/denovo/denovo_preprocess.smk"
+assembler=config['frag_de_novo'].get('assembler', 'megahit')
+if assembler == 'megahit':
+    include: src_dir+"modules/clfr/denovo/denovo_clfr.smk"
+elif assembler == 'olc':
+    include: src_dir+"modules/clfr/denovo/denovo_olc.smk"

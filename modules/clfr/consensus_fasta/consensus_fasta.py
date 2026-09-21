@@ -44,6 +44,7 @@ parser.add_argument("--min_reads", type=int, required=False)
 parser.add_argument("--downsample_ratio", type=float, default=1.0, required=False)
 parser.add_argument("--batch_id", type=str, default="", required=False)
 parser.add_argument("--samtools", type=str, default=None, required=False)
+parser.add_argument("--temp_dir", type=str, default="/dev/shm", required=False)
 parser.add_argument("--use_samtools_reference", action="store_true")
 
 args = parser.parse_args()
@@ -58,6 +59,7 @@ MIN_READS = args.min_reads
 DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
 SAMTOOLS_ARG = args.samtools
+TEMP_DIR_PARENT = args.temp_dir
 USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
 
 if DOWNSAMPLE_RATIO <= 0 or DOWNSAMPLE_RATIO > 1:
@@ -112,12 +114,15 @@ log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENS
 EMPTY_CONSENSUS_COUNT = 0
 
 # MIN_READS = 50
-TEMP_BASE_DIR = f"/dev/shm/consensus_tmp_{os.getpid()}"
-TEMP_DIR_NAME = f"consensus_single_thread_tmp_{os.getpid()}"
+# temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
+# ./Align -> ./Align/consensus_tmp_<pid>.
+TEMP_DIR_NAME = f"consensus_tmp_{os.getpid()}"
+TEMP_BASE_DIR = os.path.join((TEMP_DIR_PARENT or "/dev/shm").rstrip(os.sep), TEMP_DIR_NAME)
 FALLBACK_TEMP_DIR = "/tmp"
 
 def make_temp_dir(chrom, split_index, batch_id):
-    for base_dir in (os.path.join(TEMP_BASE_DIR, "consensus"), os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")):
+    fallback_root = os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")
+    for base_dir in (TEMP_BASE_DIR, fallback_root):
         temp_dir = (
             os.path.join(base_dir, batch_id, f"{chrom}_{split_index}")
             if batch_id else os.path.join(base_dir, f"{chrom}_{split_index}")
@@ -132,6 +137,7 @@ def make_temp_dir(chrom, split_index, batch_id):
     raise OSError("No writable temporary directory available for consensus generation")
 
 TEMP_DIR = make_temp_dir(chrom, split_index, BATCH_ID)
+sys.stderr.write(f"Using consensus temp directory: {TEMP_DIR}\n")
 current_temp_dir = TEMP_DIR
 
 # --- Global variable for FASTA reference ---
@@ -389,6 +395,26 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     if len(reads_list_obj) < MIN_READS:
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' read count {len(reads_list_obj)} < {MIN_READS}, skipping.\n")
         return None
+
+    # Guard against barcode collisions: unrelated molecules sharing the same
+    # UMI by chance can scatter reads across tens of megabases. Feeding that
+    # into StringTie with no bundling limit can hang for minutes on a single
+    # UMI group. A real fragment can't exceed MAX_FRAG_LEN, so reject anything
+    # far beyond that before ever calling StringTie.
+    UMI_SPAN_SANITY_LIMIT = MAX_FRAG_LEN * 5
+    umi_positions = [
+        read.reference_start for read in reads_list_obj
+        if read.reference_start is not None and read.reference_start >= 0
+    ]
+    if umi_positions:
+        umi_span = max(umi_positions) - min(umi_positions)
+        if umi_span > UMI_SPAN_SANITY_LIMIT:
+            sys.stderr.write(
+                f"WARNING: UMI ID '{umi_id}' reads span {umi_span}bp "
+                f"(> {UMI_SPAN_SANITY_LIMIT}bp sanity limit) - likely barcode "
+                f"collision, skipping.\n"
+            )
+            return None
 
     # Downsample reads if ratio < 1.0
     if DOWNSAMPLE_RATIO < 1.0 and len(reads_list_obj) > 1:

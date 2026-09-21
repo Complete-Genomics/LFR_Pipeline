@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 
 
@@ -56,6 +57,10 @@ def parse_args():
         "--pigz",
         default="pigz",
         help="pigz executable for parallel output compression; use 'none' to disable.",
+    )
+    parser.add_argument(
+        "--tmpdir",
+        help="Directory for temporary FASTQ chunks; defaults to the output directory.",
     )
     args = parser.parse_args()
     if not args.barcode and not args.cbc_len:
@@ -109,7 +114,7 @@ def open_text_gzip(path, mode):
     return gzip.open(path, mode, compresslevel=6)
 
 
-class PigzTextWriter:
+class PigzWriter:
     def __init__(self, path, pigz_cmd, threads):
         self.path = path
         self.out = open(path, "wb")
@@ -120,7 +125,7 @@ class PigzTextWriter:
         )
 
     def write(self, payload):
-        self.proc.stdin.write(payload.encode())
+        self.proc.stdin.write(payload)
 
     def close(self):
         if self.proc.stdin is not None:
@@ -133,8 +138,18 @@ class PigzTextWriter:
 
 def open_output_gzip(path, pigz_cmd, threads):
     if pigz_cmd and pigz_cmd.lower() != "none" and shutil.which(pigz_cmd):
-        return PigzTextWriter(path, pigz_cmd, threads)
-    return open_text_gzip(path, "wt")
+        return PigzWriter(path, pigz_cmd, threads)
+    return gzip.open(path, "wb", compresslevel=6)
+
+
+def write_chunk_outputs(chunk_index, outputs):
+    chunk_paths = {}
+    for key, payload in outputs.items():
+        path = os.path.join(OPTIONS["chunk_dir"], "%08d.%s.fq" % (chunk_index, key))
+        with open(path, "wb") as out:
+            out.write(payload.encode())
+        chunk_paths[key] = path
+    return chunk_paths
 
 
 def read_fastq_record(handle):
@@ -409,7 +424,8 @@ def process_chunk(item):
             substr(r2_qual, bc_start, full_len),
         ))
 
-    return chunk_index, {key: "".join(value) for key, value in outputs.items()}, stats
+    outputs = {key: "".join(value) for key, value in outputs.items()}
+    return chunk_index, write_chunk_outputs(chunk_index, outputs), stats
 
 
 def process_clfr_chunk(item):
@@ -484,7 +500,8 @@ def process_clfr_chunk(item):
                 header2 = "%s#%s/2\tBX:Z:%s" % (read_id, bc, bx)
             outputs["main2"].append(make_record(header2, r2_read, r2_plus, r2_qual_out))
 
-    return chunk_index, {key: "".join(value) for key, value in outputs.items()}, stats
+    outputs = {key: "".join(value) for key, value in outputs.items()}
+    return chunk_index, write_chunk_outputs(chunk_index, outputs), stats
 
 
 def output_paths(output_prefix, output_mode):
@@ -586,6 +603,11 @@ def main():
             args.barcode, need_string_hash
         )
     options = vars(args).copy()
+    output_dir = os.path.dirname(os.path.abspath(args.output))
+    temp_parent = args.tmpdir or output_dir
+    os.makedirs(temp_parent, exist_ok=True)
+    chunk_dir = tempfile.mkdtemp(prefix=".split_barcode_chunks.", dir=temp_parent)
+    options["chunk_dir"] = chunk_dir
     output_handles = {}
     paths = output_paths(args.output, args.output_mode)
     output_threads = max(1, threads // max(1, len(paths)))
@@ -622,11 +644,13 @@ def main():
             )
             iterator = pool.imap(worker, chunks, chunksize=1)
 
-        for chunk_index, outputs, stats in iterator:
+        for chunk_index, chunk_paths, stats in iterator:
             if chunk_index % 100 == 0:
                 print("chunks processed %s ..." % chunk_index, file=sys.stderr)
-            for key, payload in outputs.items():
-                output_handles[key].write(payload)
+            for key, path in chunk_paths.items():
+                with open(path, "rb") as chunk_handle:
+                    shutil.copyfileobj(chunk_handle, output_handles[key], length=1024 * 1024)
+                os.unlink(path)
             for key in ("reads_num", "split_reads_num", "bc1_cnt", "bc2_cnt", "bc3_cnt"):
                 if key in stats:
                     aggregate[key] += stats[key]
@@ -646,6 +670,7 @@ def main():
             pool.terminate()
         for handle in output_handles.values():
             handle.close()
+        shutil.rmtree(chunk_dir, ignore_errors=True)
 
     if is_clfr:
         write_clfr_logs(aggregate, barcode_reads, barcode_order, args.cbc_len)

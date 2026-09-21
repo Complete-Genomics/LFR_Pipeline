@@ -369,6 +369,39 @@ class frag_denovo(object):
         except Exception as e: print(e)
         return
 
+
+def metrics_olc(fasta, outdir):
+    len_cutoff = 7000
+    CBC_LEN = 15
+    s = frag_denovo(fasta)
+    s.assembly_len_distribution(CBC_LEN)  
+    assembly_len = s.assembly_len
+    assembly_len_filtered = [i for i in s.assembly_len if i<=len_cutoff]
+    frag_cnt = len(assembly_len)
+
+    print(f'frag count={frag_cnt}')
+    print(f'mean={round(mean(assembly_len_filtered),4)}, median={median(assembly_len_filtered)}')
+    print(f'min={min(assembly_len_filtered)}, max={max(assembly_len_filtered)}')
+    ## plot denovo_frag_length_distribution
+    sns.set(rc={'figure.figsize':(15,8)})
+    sns.set_style("whitegrid")
+    _fig = sns.distplot(assembly_len_filtered,bins=50,kde=True)
+    plt.title(f"frag_length_distribution")
+    _fig.text(
+        0.98, 0.98,
+        f"count={frag_cnt}\nmean={mean(assembly_len_filtered):.4f}\n"
+        f"median={median(assembly_len_filtered)}\n"
+        f"min={min(assembly_len_filtered)}\nmax={max(assembly_len_filtered)}",
+        transform=_fig.transAxes,
+        ha="right",
+        va="top",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+    )
+    plt.savefig( f"{outdir}/frag_length_distribution.png")
+    plt.clf()
+    plt.close()
+
+
 def metrics_basic(fasta, outdir):
     len_cutoff = 7000
     
@@ -715,6 +748,10 @@ if __name__ == "__main__":
             metrics_basic(fasta, OUTDIR)
         else:
             print('needs fasta')
+    
+    elif module == 'metrics_olc':
+        metrics_olc(fasta, OUTDIR)
+
     elif module =='fragLen_readsCount_corr':
         fragLen_readsCount_corr()
 
@@ -796,5 +833,4 @@ if __name__ == "__main__":
 
     else:
         print('input a correct module')
-
 
