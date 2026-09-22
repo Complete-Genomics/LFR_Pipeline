@@ -150,10 +150,11 @@ rule run_all:
 
 src_dir = config['params']['src_dir']
 mrna_mapper = config['params']['mrna_mapper']
+read_len = config['params']['read_len']
 include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
-if mrna_mapper =='minimap2':
+if read_len > 150 or mrna_mapper == 'minimap2':
     if config['params'].get('minimap_parallel_split', False):
         include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
     else:

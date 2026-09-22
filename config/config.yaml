@@ -55,7 +55,7 @@ params:
     # Pass -T ref.fa to samtools consensus. Disabled by default because it can be slow.
     use_samtools_reference: False
     correct_rc: True
-    # map mrna library to genome: 'star' (gDNA uses BWA), 'minimap2'
+    # map mRNA library to genome: 'star' (gDNA uses BWA), 'minimap2'; read_len > 150 always uses minimap2
     mrna_mapper: 'star'
     library_species: 'human'
     ref_id: ''
