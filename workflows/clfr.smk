@@ -5,6 +5,8 @@ import pysam
 
 SEQUENCE_TYPE =config['params']['sequence_type'].lower()
 MRNA_MAPPER = config['params']['mrna_mapper'].lower()
+if config['params']['library_type'] == 'mrna':
+    MRNA_MAPPER = 'minimap2' if config['params']['read_len'] > 150 else 'hisat2'
 # Define the ref based on the config file
 # Sort of acts like a global variable so you don't need to always type the whole thing
 if config['params']['library_species']=='human':
@@ -149,12 +151,11 @@ rule run_all:
 # Include other modules and rules to run
 
 src_dir = config['params']['src_dir']
-mrna_mapper = config['params']['mrna_mapper']
-read_len = config['params']['read_len']
+mrna_mapper = MRNA_MAPPER
 include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
-if read_len > 150 or mrna_mapper == 'minimap2':
+if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
     if config['params'].get('minimap_parallel_split', False):
         include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
     else:
