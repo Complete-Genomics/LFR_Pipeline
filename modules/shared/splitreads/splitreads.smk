@@ -309,56 +309,6 @@ rule split_reads:
         else:
             shell("touch split_stat_read1.log && cd data && ln -s read_1.fq.gz split_read.1.fq.gz && ln -s read_2.fq.gz split_read.2.fq.gz && cd ..")
 
-rule qc_adapter183:
-    # adapter183 is a 5'-anchored R1 contaminant.  Sample enough reads to
-    # make the trim decision cheaply, then record the measured fraction so
-    # the automatic decision is auditable for every run.
-    input:
-        r1="data/split_read.1.fq.gz"
-    output:
-        "data/split_read_1.adapter183_qc.tsv"
-    params:
-        max_reads=int(config['params'].get('adapter_qc_reads', 100000)),
-        min_fraction=float(config['params'].get('adapter_qc_min_fraction', 0.01))
-    run:
-        import gzip
-
-        adapter = "GAGACGTTCTCGACTCAGCAGAGGG"
-
-        def matches_adapter(sequence):
-            max_start = min(30 - len(adapter) + 1, len(sequence) - len(adapter) + 1)
-            for start in range(max(0, max_start)):
-                window = sequence[start:start + len(adapter)]
-                if sum(base != expected for base, expected in zip(window, adapter)) <= 1:
-                    return True
-            return False
-
-        checked = 0
-        matched = 0
-        if SEQUENCE_TYPE == 'pe':
-            with gzip.open(str(input.r1), "rt") as fastq:
-                while checked < params.max_reads:
-                    header = fastq.readline()
-                    if not header:
-                        break
-                    sequence = fastq.readline().strip()
-                    fastq.readline()
-                    fastq.readline()
-                    checked += 1
-                    if matches_adapter(sequence):
-                        matched += 1
-
-        fraction = matched / checked if checked else 0.0
-        trim_5p = checked > 0 and fraction >= params.min_fraction
-        with open(str(output[0]), "w") as report:
-            report.write("metric\tvalue\n")
-            report.write("reads_checked\t{}\n".format(checked))
-            report.write("adapter183_reads\t{}\n".format(matched))
-            report.write("adapter183_fraction\t{:.6f}\n".format(fraction))
-            report.write("min_fraction\t{:.6f}\n".format(params.min_fraction))
-            report.write("trim_5p\t{}\n".format(str(trim_5p).lower()))
-
-
 rule trim_reads:
     # qtrim=rl only trims by base quality -- it does not detect or remove
     # adapter read-through. Confirmed via real 16S/DNBSEQ data: reads whose
@@ -374,13 +324,15 @@ rule trim_reads:
     # index/barcode that follows). hdist=1 tolerates the occasional
     # single-base sequencing error inside the adapter itself.
     #
-    # The QC rule above automatically enables a separate pass when the
-    # sampled R1 adapter183 fraction reaches its configured threshold. Some
-    # cLFR/stLFR mRNA batches carry this 5'-anchored contaminant on R1
-    # (pos 1-25, "adapter183" =
+    # Optional separate pass (adapter_ref_5p: true/false switch, off by
+    # default -- opt in per batch in that run's own config.yaml, see
+    # bootstrap.smk): some cLFR/stLFR mRNA batches carry a 5'-anchored
+    # contaminant on R1 (pos 1-25, "adapter183" =
     # GAGACGTTCTCGACTCAGCAGAGGG) unrelated to the 3' read-through case
     # above and NOT confirmed universal across every sample/protocol this
-    # pipeline runs. It needs the opposite trim direction from the
+    # pipeline runs -- see
+    # LFR_Pipeline/memory/project_lfr_chr18_troubleshoot.md before enabling
+    # it for a new batch. It needs the opposite trim direction from the
     # adapter_ref pass (ktrim=l, not ktrim=r): the match sits at the read's
     # own start, so folding it into the ktrim=r pass above discards the
     # entire read down to ~0bp and bbduk's default minlen then drops it
@@ -391,11 +343,10 @@ rule trim_reads:
     # still stripping the contaminant (confirmed by post-trim base
     # composition returning to background at pos1-25). adapter_ref_5p_file
     # (defaulted in bootstrap.smk to the packaged mgi_dnbseq_5p_contam.fa)
-    # picks which sequence(s) to trim.
+    # picks which sequence(s) to trim; the switch just turns the pass on.
     input:
         f1="data/split_read.1.fq.gz",
-        f2="data/split_read.2.fq.gz",
-        adapter_qc="data/split_read_1.adapter183_qc.tsv"
+        f2="data/split_read.2.fq.gz"
     output:
         t1= "data/split_read_1_trimmed.fastq.gz",
         t2= "data/split_read_2_trimmed.fastq.gz"
@@ -403,6 +354,7 @@ rule trim_reads:
         bbduk = config['params']['bbduk'],
         sequence_type= config['params']['sequence_type'].lower(),
         adapter_ref = config['params'].get('adapter_ref', ''),
+        trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
         adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', '')
     benchmark:
         "Benchmarks/consensus_fasta.trim_reads.txt"
@@ -415,8 +367,7 @@ rule trim_reads:
 
         PRE1={input.f1}
         PRE2={input.f2}
-        AUTO_TRIM_5P=$(awk -F '\t' '$1 == "trim_5p" {{print $2}}' {input.adapter_qc})
-        if [[ "$AUTO_TRIM_5P" == "true" ]]; then
+        if [[ "{params.trim_5p_contam}" == "True" ]]; then
             PRE1="data/split_read_1_5ptrim.fastq.gz"
             PRE2="data/split_read_2_5ptrim.fastq.gz"
             if [[ "{params.sequence_type}" == "pe" ]]; then

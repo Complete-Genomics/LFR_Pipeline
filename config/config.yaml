@@ -130,6 +130,8 @@ params:
     # denovo assembly tools (required when modules.frag_de_novo: True)
     megahit: "/path/to/megahit"
     bbduk: "/path/to/bbduk.sh"
+    # additional trim on adapter183 for clfr mrna lib
+    adapter_ref_5p: True
     bgzip: "/path/to/bgzip"
     # reference-free chimera detection for OLC post-assembly QC (no curated
     # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
