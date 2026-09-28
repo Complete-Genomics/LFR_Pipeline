@@ -112,6 +112,7 @@ if USE_SAMTOOLS_REFERENCE and not SAMTOOLS_CONSENSUS_HAS_REF:
     sys.stderr.write("WARNING: --use_samtools_reference was requested, but this samtools consensus does not support -T.\n")
 log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENSUS_USES_REF)
 EMPTY_CONSENSUS_COUNT = 0
+UMI_SPAN_SANITY_EXCEEDED_COUNT = 0
 
 # MIN_READS = 50
 # temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
@@ -386,7 +387,7 @@ def get_2bp_sequence_pysam(chrom, start, end):
 
 def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
     """Process a UMI group's reads to generate a consensus sequence."""
-    global EMPTY_CONSENSUS_COUNT
+    global EMPTY_CONSENSUS_COUNT, UMI_SPAN_SANITY_EXCEEDED_COUNT
     
     if not reads_list_obj:
         sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no reads data, skipping.\n")
@@ -409,11 +410,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     if umi_positions:
         umi_span = max(umi_positions) - min(umi_positions)
         if umi_span > UMI_SPAN_SANITY_LIMIT:
-            sys.stderr.write(
-                f"WARNING: UMI ID '{umi_id}' reads span {umi_span}bp "
-                f"(> {UMI_SPAN_SANITY_LIMIT}bp sanity limit) - likely barcode "
-                f"collision, skipping.\n"
-            )
+            UMI_SPAN_SANITY_EXCEEDED_COUNT += 1
             return None
 
     # Downsample reads if ratio < 1.0
@@ -618,6 +615,10 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
     if EMPTY_CONSENSUS_COUNT:
         sys.stderr.write(
             f"Skipped {EMPTY_CONSENSUS_COUNT} regions with empty or invalid samtools consensus output.\n"
+        )
+    if UMI_SPAN_SANITY_EXCEEDED_COUNT:
+        sys.stderr.write(
+            f"Skipped {UMI_SPAN_SANITY_EXCEEDED_COUNT} UMI groups exceeding the span sanity limit.\n"
         )
     sys.stderr.write(f"Processing complete. All consensus sequences written to '{output_fasta_file}'.\n")
 
