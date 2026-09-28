@@ -323,6 +323,27 @@ rule trim_reads:
     # regardless of what it is -- no need to separately match the variable
     # index/barcode that follows). hdist=1 tolerates the occasional
     # single-base sequencing error inside the adapter itself.
+    #
+    # Optional separate pass (adapter_ref_5p: true/false switch, off by
+    # default -- opt in per batch in that run's own config.yaml, see
+    # bootstrap.smk): some cLFR/stLFR mRNA batches carry a 5'-anchored
+    # contaminant on R1 (pos 1-25, "adapter183" =
+    # GAGACGTTCTCGACTCAGCAGAGGG) unrelated to the 3' read-through case
+    # above and NOT confirmed universal across every sample/protocol this
+    # pipeline runs -- see
+    # LFR_Pipeline/memory/project_lfr_chr18_troubleshoot.md before enabling
+    # it for a new batch. It needs the opposite trim direction from the
+    # adapter_ref pass (ktrim=l, not ktrim=r): the match sits at the read's
+    # own start, so folding it into the ktrim=r pass above discards the
+    # entire read down to ~0bp and bbduk's default minlen then drops it
+    # outright (measured: ~30% of R1 reads lost this way). Running it first
+    # as its own ktrim=l pass, restricted to the first 30bp (restrictleft=30)
+    # so it can't false-hit real internal sequence, recovers essentially all
+    # of that 30% (measured retention 99.998% vs 70.50% on E200013590) while
+    # still stripping the contaminant (confirmed by post-trim base
+    # composition returning to background at pos1-25). adapter_ref_5p_file
+    # (defaulted in bootstrap.smk to the packaged mgi_dnbseq_5p_contam.fa)
+    # picks which sequence(s) to trim; the switch just turns the pass on.
     input:
         f1="data/split_read.1.fq.gz",
         f2="data/split_read.2.fq.gz"
@@ -332,7 +353,9 @@ rule trim_reads:
     params:
         bbduk = config['params']['bbduk'],
         sequence_type= config['params']['sequence_type'].lower(),
-        adapter_ref = config['params'].get('adapter_ref', '')
+        adapter_ref = config['params'].get('adapter_ref', ''),
+        trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
+        adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', '')
     benchmark:
         "Benchmarks/consensus_fasta.trim_reads.txt"
     shell:
@@ -341,10 +364,26 @@ rule trim_reads:
         if [[ -n "{params.adapter_ref}" ]]; then
             ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k=23 hdist=1"
         fi
+
+        PRE1={input.f1}
+        PRE2={input.f2}
+        if [[ "{params.trim_5p_contam}" == "True" ]]; then
+            PRE1="data/split_read_1_5ptrim.fastq.gz"
+            PRE2="data/split_read_2_5ptrim.fastq.gz"
+            if [[ "{params.sequence_type}" == "pe" ]]; then
+                {params.bbduk} in1={input.f1} in2={input.f2} out1=$PRE1 out2=$PRE2 \
+                    ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file}
+            else
+                {params.bbduk} in={input.f2} out=$PRE2 \
+                    ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file}
+                touch $PRE1
+            fi
+        fi
+
         if [[ "{params.sequence_type}" == "pe" ]]; then
-            {params.bbduk} in1={input.f1} in2={input.f2} out1={output.t1} out2={output.t2} qtrim=rl $ADAPTER_ARGS
+            {params.bbduk} in1=$PRE1 in2=$PRE2 out1={output.t1} out2={output.t2} qtrim=rl $ADAPTER_ARGS
         elif [[ "{params.sequence_type}" == "se" ]]; then
-            {params.bbduk} in={input.f2} out={output.t2} qtrim=rl maxns=0 $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
+            {params.bbduk} in=$PRE2 out={output.t2} qtrim=rl maxns=0 $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;

@@ -28,6 +28,18 @@ _set_default_param(
     "adapter_ref",
     str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "mgi_dnbseq_adapters.fa"),
 )
+# adapter_ref_5p is a plain per-batch on/off switch (no default -> off).
+# The 5' contaminant (adapter183) is confirmed only for the cLFR/stLFR mRNA
+# batches investigated so far (bare/chr18/E250041951 -- see
+# LFR_Pipeline/memory/project_lfr_chr18_troubleshoot.md). Opt in per batch
+# by setting `adapter_ref_5p: true` in that run's own config.yaml -- do not
+# flip it on for every sample/protocol this pipeline runs. The reference
+# file path always defaults to the packaged copy below; override
+# adapter_ref_5p_file only if some other batch needs a different sequence.
+_set_default_param(
+    "adapter_ref_5p_file",
+    str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "mgi_dnbseq_5p_contam.fa"),
+)
 
 for _name, _default in {
     "gatk_install": "gatk",

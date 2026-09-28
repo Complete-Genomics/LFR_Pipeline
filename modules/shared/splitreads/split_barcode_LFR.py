@@ -271,6 +271,9 @@ def process_chunk(item):
         stats["reads_num"] += 1
         r2_header, r2_seq_raw, r2_plus, r2_qual = r2
         id_str = first_id(r2_header)
+        # R1 keeps its own id so a desynced R1/R2 fastq pair surfaces as mismatched
+        # QNAMEs in the BAM instead of being masked by reusing R2's id for both ends
+        id_str_r1 = first_id(r1[0]) if r1 is not None else id_str
         r2_seq = translate_r2_for_barcode(r2_seq_raw, swap)
 
         read = substr(r2_seq, gdna_start, read_len)
@@ -310,12 +313,12 @@ def process_chunk(item):
             if read_len_r1 > 0 and r1 is not None:
                 r1_header, r1_seq, r1_plus, r1_qual = r1
                 r1_seq = translate(r1_seq, swap)
-                out_header = "%s#%s#/1\tBX:Z:%s" % (id_str, barcode, barcode)
+                out_header = "%s#%s#/1\tBX:Z:%s" % (id_str_r1, barcode, barcode)
                 if output_mode == "cwgs":
-                    out_header = "%s#%s/1" % (id_str, barcode)
+                    out_header = "%s#%s/1" % (id_str_r1, barcode)
                 elif output_mode != "stratified":
                     out_header = "%s#%s/1\tBX:Z:%s\tBC:Z:%s" % (
-                        id_str, barcode, barcode, hash_string
+                        id_str_r1, barcode, barcode, hash_string
                     )
                     if additional_bc_len > 0:
                         out_header += "\tMI:Z:%s" % additional_bc
@@ -359,10 +362,10 @@ def process_chunk(item):
                 r1_header, r1_seq, r1_plus, r1_qual = r1
                 r1_seq = translate(r1_seq, swap) if output_mode in ("single", "cwgs") else r1_seq
                 if output_mode == "cwgs":
-                    out_header = "%s#0_0_0/1" % id_str
+                    out_header = "%s#0_0_0/1" % id_str_r1
                 else:
                     out_header = "%s#0_0_0/1\tBX:Z:0_0_0\tBC:Z:%s" % (
-                        id_str, hash_string
+                        id_str_r1, hash_string
                     )
                 if additional_bc_len > 0 and output_mode != "cwgs":
                     out_header += "\tMI:Z:%s" % additional_bc
@@ -407,7 +410,7 @@ def process_chunk(item):
         if read_len_r1 > 0 and r1 is not None:
             r1_header, r1_seq, r1_plus, r1_qual = r1
             outputs[out1_key].append(make_record(
-                "%s#%s#/1\tBX:Z:%s" % (id_str, bc_str, partial_barcode),
+                "%s#%s#/1\tBX:Z:%s" % (id_str_r1, bc_str, partial_barcode),
                 substr(r1_seq, gdna_start_r1, read_len_r1),
                 r1_plus,
                 substr(r1_qual, gdna_start_r1, read_len_r1),
@@ -455,6 +458,9 @@ def process_clfr_chunk(item):
         stats["reads_num"] += 1
         r2_header, r2_seq, r2_plus, r2_qual = r2
         read_id = first_id(r2_header)
+        # R1 keeps its own id so a desynced R1/R2 fastq pair surfaces as mismatched
+        # QNAMEs in the BAM instead of being masked by reusing R2's id for both ends
+        read_id_r1 = first_id(r1[0]) if r1 is not None else read_id
 
         if use_reverse_complement:
             bc = reverse_complement(substr(r2_seq, bc_start, bc_len_redundant))
@@ -475,14 +481,14 @@ def process_clfr_chunk(item):
             r1_header, r1_seq, r1_plus, r1_qual = r1
             if additional_bc_len > 0:
                 additional_bc = substr(r2_seq, additional_bc_start, additional_bc_len)
-                header1 = "%s#%s#%s/1\tBX:Z:%s" % (read_id, bc, additional_bc, bx)
+                header1 = "%s#%s#%s/1\tBX:Z:%s" % (read_id_r1, bc, additional_bc, bx)
                 header2 = "%s#%s#%s/2\tBX:Z:%s" % (read_id, bc, additional_bc, bx)
             elif additional_bc_len_r1 > 0:
                 additional_bc = substr(r1_seq, additional_bc_start, additional_bc_len_r1)
-                header1 = "%s#%s#%s/1\tBX:Z:%s" % (read_id, bc, additional_bc, bx)
+                header1 = "%s#%s#%s/1\tBX:Z:%s" % (read_id_r1, bc, additional_bc, bx)
                 header2 = "%s#%s#%s/2\tBX:Z:%s" % (read_id, bc, additional_bc, bx)
             else:
-                header1 = "%s#%s/1\tBX:Z:%s" % (read_id, bc, bx)
+                header1 = "%s#%s/1\tBX:Z:%s" % (read_id_r1, bc, bx)
                 header2 = "%s#%s/2\tBX:Z:%s" % (read_id, bc, bx)
 
             outputs["main1"].append(make_record(
