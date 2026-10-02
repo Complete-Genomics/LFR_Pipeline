@@ -27,7 +27,7 @@ def bin_umi(per_umi):
         ("20<=N<25", per_umi["read_count"].between(20, 24)),
         ("N>=25", per_umi["read_count"] >= 25),
     ]
-    return pd.DataFrame([
+    summary = pd.DataFrame([
         {
             "bin": label,
             "n_reads": per_umi.loc[mask, "read_count"].sum(),
@@ -35,6 +35,9 @@ def bin_umi(per_umi):
         }
         for label, mask in bins
     ])
+    summary["%reads"] = (summary["n_reads"] / per_umi["read_count"].sum() * 100).round(2)
+    summary["%umi"] = (summary["n_umi"] / len(per_umi) * 100).round(2)
+    return summary
 
 
 df = pd.read_csv(
