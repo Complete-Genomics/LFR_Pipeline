@@ -114,6 +114,7 @@ rule get_consensus_fasta:
 
 
 split_cnt = list(range(NUM_SPLITS_CONSENSUS))  # [0, 1, 2, ..., 19]
+MIN_FRAG_LEN = 400
 
 rule fix_consensus_format:
     input:
@@ -122,12 +123,17 @@ rule fix_consensus_format:
         "consensus/tmp/{chr}/{id}_{chr}_{i}.noN.fix.fasta"
     params:
         python = config['params']['general_python'],
-        src_dir = config['params']['src_dir']
+        src_dir = config['params']['src_dir'],
+        min_frag_len = MIN_FRAG_LEN
     benchmark:
         "Benchmarks/consensus_fasta.fix_consensus_format.{id}.{chr}.{i}.txt"
     shell:
         "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py "
-        "--module fix_fasta --input_fasta {input} --output_fasta {output}"
+        "--module fix_fasta --input_fasta {input} --output_fasta {output}.tmp && "
+        "awk -v min_frag_len={params.min_frag_len} "
+        "'function emit() {{if (header != \"\" && length(seq) >= min_frag_len) print header \"\\n\" seq}} "
+        "/^>/ {{emit(); header=$0; seq=\"\"; next}} {{seq=seq $0}} END {{emit()}}' "
+        "{output}.tmp > {output} && rm -f {output}.tmp"
 
 rule merge_consensus_fasta:
     input:
