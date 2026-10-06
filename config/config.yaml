@@ -56,7 +56,9 @@ params:
     use_samtools_reference: False
     correct_rc: True
     # cLFR mRNA mapper is selected by read_len: <=150 uses HISAT2; >150 uses minimap2. gDNA uses BWA.
-    mrna_mapper: 'star'
+    # 'minimap_genecode' overrides that: SE600 reads -> GENCODE (run_all = genecode BAM only, rule map_reads_minimap_genecode).
+    # 'minimap2' -> map_reads_minimap (genome).
+    mrna_mapper: 'minimap_genecode'
     library_species: 'human'
     ref_id: ''
     # 'gdna' (map with BWA) or 'mrna' (map with STAR/minimap2)
@@ -124,6 +126,28 @@ params:
     # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
     minimap2_index: ""
     minimap2_mrna_index: ""
+    # ---- mrna_mapper 'minimap_genecode' (modules/clfr/align/genecode.smk) ----
+    # The combined reference (transcripts + rRNA + genome decoy) is sample-independent: build_genecode_ref
+    # writes it ONCE next to genecode_transcripts (gencode.v50.transcripts_rRNA_decoy.fa.gz) and every sample
+    # reuses it; it is rebuilt only if missing or an input is newer. Set genecode_ref to pick another location.
+    # rRNA is largely absent from GENCODE: without genecode_rrna_fa (e.g. NCBI NR_046235 45S + NR_023363 5S)
+    # rRNA reads cannot be counted; without genecode_genome (GRCh38.primary_assembly, decoy) genomic/intronic
+    # reads get forced onto transcripts. Build it once before launching several samples (concurrent first
+    # runs would build it twice).
+    genecode_ref: ""
+    genecode_transcripts: "/mnt/qnap-archive/ycai/ref/genecode/gencode.v50.transcripts.fa.gz"
+    genecode_gtf: "/mnt/qnap-archive/ycai/ref/genecode/gencode.v50.annotation.gtf.gz"   # gene_type per transcript
+    genecode_rrna_fa: ""
+    genecode_genome: ""
+    # head (default): first N reads, fast (stops early) but depends on file order.
+    # random: seqtk read sampling over the whole file, unbiased for read-level %, slow on huge fq.
+    # umi: sample whole UMIs (all reads of each kept; set explicitly, needed for UMI-level %; one full awk pass).
+    genecode_subsample_mode: "head"
+    genecode_umi_n: 50000              # umi mode: UMIs to sample
+    genecode_umi_min_reads: 25         # umi mode: only UMIs with >= this many reads (25 = consensus threshold; 1 = whole library, mostly noise UMIs)
+    genecode_subsample_reads: 2000000  # head/random mode: reads to keep
+    genecode_subsample_seed: 100
+    genecode_min_cov: 0.8
     # samtools sort memory limit per sorting/compression thread.
     minimap_sort_mem: "2G"
 
@@ -132,6 +156,8 @@ params:
     bbduk: "/path/to/bbduk.sh"
     # additional trim on adapter183 for clfr mrna lib
     adapter_ref_5p: True
+    # >0: strip poly-A/T tails of at least this length after adapter trimming (0 = off)
+    trim_polya: 0
     bgzip: "/path/to/bgzip"
     # reference-free chimera detection for OLC post-assembly QC (no curated
     # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
