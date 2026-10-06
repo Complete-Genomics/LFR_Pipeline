@@ -41,8 +41,13 @@ _set_default_param(
     str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "mgi_dnbseq_5p_contam.fa"),
 )
 
-# adapter_ref_3p_linker is opt-in (cLFR SE600 batches only): set it in that run's config.yaml to the
-# packaged config/adapters/clfr_se600_3p_linker.fa (or any fasta); empty/unset = off.
+# adapter_ref_3p is a plain per-batch on/off switch (no default -> off) for the cLFR SE600 3' linker
+# (GTATCTGAGTCC). Opt in per batch with `adapter_ref_3p: true` in that run's config.yaml;
+# adapter_ref_3p_file defaults to the packaged copy below.
+_set_default_param(
+    "adapter_ref_3p_file",
+    str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "clfr_se600_3p_linker.fa"),
+)
 
 for _name, _default in {
     "gatk_install": "gatk",

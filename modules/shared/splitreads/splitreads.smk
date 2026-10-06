@@ -354,11 +354,15 @@ rule trim_reads:
         bbduk = config['params']['bbduk'],
         sequence_type= config['params']['sequence_type'].lower(),
         adapter_ref = config['params'].get('adapter_ref', ''),
+        # k-mer length of the adapter_ref pass (default 23); SE600 batches set 18 so the 18bp of MGI_forward_filter
+        # that follow the 3' linker (the read carries <23bp of it) still match
+        adapter_ref_k = int(config['params'].get('adapter_ref_k', 23)),
         trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
         adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', ''),
         # cLFR SE600 3' linker (GTATCTGAGTCC, 12bp) -- too short for the k=23 adapter_ref pass, so it gets its
-        # own ktrim=r pass with k=12 hdist=0 (empty = off)
-        adapter_ref_3p_linker = config['params'].get('adapter_ref_3p_linker', ''),
+        # own ktrim=r pass with k=12 hdist=0 (adapter_ref_3p: true/false switch, off by default)
+        trim_3p_linker = str(config['params'].get('adapter_ref_3p', False)).strip().lower() in ("true", "1", "yes"),
+        adapter_ref_3p_file = config['params'].get('adapter_ref_3p_file', ''),
         # >0: after adapter trimming, strip poly-A/T tails of at least this length (0 = off)
         trim_polya = int(config['params'].get('trim_polya', 0))
     benchmark:
@@ -367,7 +371,7 @@ rule trim_reads:
         """
         ADAPTER_ARGS=""
         if [[ -n "{params.adapter_ref}" ]]; then
-            ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k=23 hdist=1"
+            ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k={params.adapter_ref_k} hdist=1"
         fi
 
         # Up to four bbduk stages chained through uncompressed pipes (5' contaminant -> 3' linker -> 3' adapter + qtrim
@@ -391,8 +395,8 @@ rule trim_reads:
             CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file} | "
             MAIN_IN="$PIPE_IN"
         fi
-        if [[ -n "{params.adapter_ref_3p_linker}" ]]; then
-            CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT ktrim=r k=12 hdist=0 ref={params.adapter_ref_3p_linker} | "
+        if [[ "{params.trim_3p_linker}" == "True" ]]; then
+            CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT ktrim=r k=12 hdist=0 ref={params.adapter_ref_3p_file} | "
             MAIN_IN="$PIPE_IN"
         fi
         if [[ {params.trim_polya} -gt 0 ]]; then
