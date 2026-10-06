@@ -156,6 +156,7 @@ params:
     bbduk: "/path/to/bbduk.sh"
     # additional trim on adapter183 for clfr mrna lib
     adapter_ref_5p: True
+    adapter_ref_3p_linker: "/path/to/LFR_Pipeline/config/adapters/clfr_se600_3p_linker.fa"
     # >0: strip poly-A/T tails of at least this length after adapter trimming (0 = off)
     trim_polya: 0
     bgzip: "/path/to/bgzip"

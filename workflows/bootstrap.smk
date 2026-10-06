@@ -41,6 +41,9 @@ _set_default_param(
     str(Path(config["params"]["src_dir"]) / "config" / "adapters" / "mgi_dnbseq_5p_contam.fa"),
 )
 
+# adapter_ref_3p_linker is opt-in (cLFR SE600 batches only): set it in that run's config.yaml to the
+# packaged config/adapters/clfr_se600_3p_linker.fa (or any fasta); empty/unset = off.
+
 for _name, _default in {
     "gatk_install": "gatk",
     "calc_frag_python": "python",

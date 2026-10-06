@@ -356,6 +356,9 @@ rule trim_reads:
         adapter_ref = config['params'].get('adapter_ref', ''),
         trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
         adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', ''),
+        # cLFR SE600 3' linker (GTATCTGAGTCC, 12bp) -- too short for the k=23 adapter_ref pass, so it gets its
+        # own ktrim=r pass with k=12 hdist=0 (empty = off)
+        adapter_ref_3p_linker = config['params'].get('adapter_ref_3p_linker', ''),
         # >0: after adapter trimming, strip poly-A/T tails of at least this length (0 = off)
         trim_polya = int(config['params'].get('trim_polya', 0))
     benchmark:
@@ -367,7 +370,7 @@ rule trim_reads:
             ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k=23 hdist=1"
         fi
 
-        # Up to three bbduk stages chained through uncompressed pipes (5' contaminant -> 3' adapter + qtrim
+        # Up to four bbduk stages chained through uncompressed pipes (5' contaminant -> 3' linker -> 3' adapter + qtrim
         # -> polyA); only the final stage writes to disk, so the intermediate fastq files are never written
         # or re-read. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
         if [[ "{params.sequence_type}" == "pe" ]]; then
@@ -388,10 +391,14 @@ rule trim_reads:
             CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file} | "
             MAIN_IN="$PIPE_IN"
         fi
+        if [[ -n "{params.adapter_ref_3p_linker}" ]]; then
+            CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT ktrim=r k=12 hdist=0 ref={params.adapter_ref_3p_linker} | "
+            MAIN_IN="$PIPE_IN"
+        fi
         if [[ {params.trim_polya} -gt 0 ]]; then
-            CMD="$CMD{params.bbduk} $MAIN_IN $MID_OUT $MAIN_ARGS $ADAPTER_ARGS | {params.bbduk} $PIPE_IN $FINAL_OUT trimpolya={params.trim_polya}"
+            CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT $MAIN_ARGS $ADAPTER_ARGS | {params.bbduk} $PIPE_IN $FINAL_OUT trimpolya={params.trim_polya}"
         else
-            CMD="$CMD{params.bbduk} $MAIN_IN $FINAL_OUT $MAIN_ARGS $ADAPTER_ARGS"
+            CMD="${{CMD}}{params.bbduk} $MAIN_IN $FINAL_OUT $MAIN_ARGS $ADAPTER_ARGS"
         fi
         eval "$CMD"
         """
