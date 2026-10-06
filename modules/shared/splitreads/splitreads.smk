@@ -355,7 +355,9 @@ rule trim_reads:
         sequence_type= config['params']['sequence_type'].lower(),
         adapter_ref = config['params'].get('adapter_ref', ''),
         trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
-        adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', '')
+        adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', ''),
+        # >0: after adapter trimming, strip poly-A/T tails of at least this length (0 = off)
+        trim_polya = int(config['params'].get('trim_polya', 0))
     benchmark:
         "Benchmarks/consensus_fasta.trim_reads.txt"
     shell:
@@ -365,27 +367,31 @@ rule trim_reads:
             ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k=23 hdist=1"
         fi
 
-        PRE1={input.f1}
-        PRE2={input.f2}
-        if [[ "{params.trim_5p_contam}" == "True" ]]; then
-            PRE1="data/split_read_1_5ptrim.fastq.gz"
-            PRE2="data/split_read_2_5ptrim.fastq.gz"
-            if [[ "{params.sequence_type}" == "pe" ]]; then
-                {params.bbduk} in1={input.f1} in2={input.f2} out1=$PRE1 out2=$PRE2 \
-                    ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file}
-            else
-                {params.bbduk} in={input.f2} out=$PRE2 \
-                    ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file}
-                touch $PRE1
-            fi
-        fi
-
+        # Up to three bbduk stages chained through uncompressed pipes (5' contaminant -> 3' adapter + qtrim
+        # -> polyA); only the final stage writes to disk, so the intermediate fastq files are never written
+        # or re-read. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
         if [[ "{params.sequence_type}" == "pe" ]]; then
-            {params.bbduk} in1=$PRE1 in2=$PRE2 out1={output.t1} out2={output.t2} qtrim=rl $ADAPTER_ARGS
+            ORIG_IN="in1={input.f1} in2={input.f2}"; PIPE_IN="in=stdin.fq int=t"
+            FINAL_OUT="out1={output.t1} out2={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS="qtrim=rl"
         elif [[ "{params.sequence_type}" == "se" ]]; then
-            {params.bbduk} in=$PRE2 out={output.t2} qtrim=rl maxns=0 $ADAPTER_ARGS && touch data/split_read_1_trimmed.fastq.gz
+            ORIG_IN="in={input.f2}"; PIPE_IN="in=stdin.fq int=f"
+            FINAL_OUT="out={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS="qtrim=rl maxns=0"
+            touch {output.t1}
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;
         fi
+
+        CMD=""
+        MAIN_IN="$ORIG_IN"
+        if [[ "{params.trim_5p_contam}" == "True" ]]; then
+            CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file} | "
+            MAIN_IN="$PIPE_IN"
+        fi
+        if [[ {params.trim_polya} -gt 0 ]]; then
+            CMD="$CMD{params.bbduk} $MAIN_IN $MID_OUT $MAIN_ARGS $ADAPTER_ARGS | {params.bbduk} $PIPE_IN $FINAL_OUT trimpolya={params.trim_polya}"
+        else
+            CMD="$CMD{params.bbduk} $MAIN_IN $FINAL_OUT $MAIN_ARGS $ADAPTER_ARGS"
+        fi
+        eval "$CMD"
         """
