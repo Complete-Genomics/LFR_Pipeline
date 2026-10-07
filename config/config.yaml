@@ -95,50 +95,52 @@ params:
     barcode_RC_GCswap: "/barcode_RC.GCswap.list"
     enforced_bc_list: ""
 
-    ref_fa: "/path/to/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa"
-    ref_fa_mrna: "/path/to/hg38/GRCh38_latest_rna.fna.ercc.fasta"
-    ref_fa_other: "/path/to/ref/other.fa"
-    toolsdir: "/path/to/CGI_WGS_Pipeline/Data_and_Tools"
-    src_dir: "/path/to/CGI_LFR_pipeline/"
-    gatk_install: "/path/to/gatk"
-    calc_frag_python: "/path/to/python"
-    dbsnp_path: "/path/to/dbsnp_138.hg38.chrfix.vcf.gz"
-    gc_bias_index: "/path/to/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.500.gc"
-    rtg_install: "/path/to/rtg"
-    gcbias_python: "/path/to/python"
-    general_python: "/path/to/python"
+    ref_fa: "hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa"
+    ref_fa_mrna: "hg38/GRCh38_latest_rna.fna.ercc.fasta"
+    ref_fa_other: "ref/other.fa"
+    toolsdir: "CGI_WGS_Pipeline/Data_and_Tools"
+    src_dir: "CGI_LFR_pipeline/"
+    gatk_install: "gatk"
+    calc_frag_python: "python"
+    dbsnp_path: "dbsnp_138.hg38.chrfix.vcf.gz"
+    gc_bias_index: "hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.500.gc"
+    rtg_install: "rtg"
+    gcbias_python: "python"
+    general_python: "python"
     tabix: "/opt/cgi-tools/bin/tabix"
-    hapcut2: "/path/to/hapcut2/bin"
-    samtools: "/path/to/hapcut2/bin/samtools"
+    hapcut2: "hapcut2/bin"
+    samtools: "hapcut2/bin/samtools"
     bcftools: "/opt/cgi-tools/bin/bcftools"
     hapcut_link_dist: 100000
     wenlan_python: "/opt/cgi-anaconda2-4.4.0/bin/python"
 
     # mRNA mapper tools (required when library_type: 'mrna')
-    star: "/path/to/STAR"
-    star_index: "/path/to/star_index"
-    hisat2: "/path/to/hisat2"
-    hisat2_index: "/path/to/hisat2_index"
-    hisat2_splicesites: "/path/to/splicesites.txt"
-    minimap2: "/path/to/minimap2"
-    minimap2_anno_bed: "/path/to/anno.bed12"
+    star: "STAR"
+    star_index: "star_index"
+    hisat2: "hisat2"
+    hisat2_index: "hisat2_index"
+    hisat2_splicesites: "splicesites.txt"
+    minimap2: "minimap2"
+    minimap2_anno_bed: "anno.bed12"
     # Optional prebuilt indexes. Build minimap2_index with -x splice:sr and
     # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
     minimap2_index: ""
     minimap2_mrna_index: ""
     # ---- mrna_mapper 'minimap_genecode' (modules/clfr/align/genecode.smk) ----
-    # The combined reference (transcripts + rRNA + genome decoy) is sample-independent: build_genecode_ref
-    # writes it ONCE next to genecode_transcripts (gencode.v50.transcripts_rRNA_decoy.fa.gz) and every sample
-    # reuses it; it is rebuilt only if missing or an input is newer. Set genecode_ref to pick another location.
-    # rRNA is largely absent from GENCODE: without genecode_rrna_fa (e.g. NCBI NR_046235 45S + NR_023363 5S)
-    # rRNA reads cannot be counted; without genecode_genome (GRCh38.primary_assembly, decoy) genomic/intronic
-    # reads get forced onto transcripts. Build it once before launching several samples (concurrent first
-    # runs would build it twice).
+    # The combined reference (transcripts + rRNA + genome decoy) is sample-independent and is NOT built by the
+    # workflow: run modules/clfr/align/build_genecode_ref.sh once (-t genecode_transcripts -r genecode_rrna_fa
+    # -g genecode_genome); it writes gencode.v50.transcripts_rRNA_decoy.fa.gz next to genecode_transcripts, which
+    # every sample reuses (genecode_ref picks another location). The workflow stops with a message if it is missing.
+    # rRNA is largely absent from GENCODE: without the rRNA fasta (e.g. NCBI NR_046235 45S + NR_023363 5S)
+    # rRNA reads cannot be counted; without the genome (GRCh38.primary_assembly, decoy) genomic/intronic
+    # reads get forced onto transcripts.
+    # Input: an already split + trimmed SE600 fastq (the workflow does not start from raw reads). Required.
+    genecode_trimmed_fq: ""
     genecode_ref: ""
-    genecode_transcripts: "/mnt/qnap-archive/ycai/ref/genecode/gencode.v50.transcripts.fa.gz"
-    genecode_gtf: "/mnt/qnap-archive/ycai/ref/genecode/gencode.v50.annotation.gtf.gz"   # gene_type per transcript
-    genecode_rrna_fa: ""
-    genecode_genome: ""
+    genecode_transcripts: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"
+    genecode_gtf: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.annotation.gtf.gz"   # gene_type per transcript
+    genecode_rrna_fa: "/home/ycai/src/LFR_Pipeline/ref/genecode/human_rRNA.fa"
+    genecode_genome: "/home/ycai/src/LFR_Pipeline/ref/genecode/GRCh38.primary_assembly.genome.fa.gz"
     # head (default): first N reads, fast (stops early) but depends on file order.
     # random: seqtk read sampling over the whole file, unbiased for read-level %, slow on huge fq.
     # umi: sample whole UMIs (all reads of each kept; set explicitly, needed for UMI-level %; one full awk pass).
@@ -152,8 +154,8 @@ params:
     minimap_sort_mem: "2G"
 
     # denovo assembly tools (required when modules.frag_de_novo: True)
-    megahit: "/path/to/megahit"
-    bbduk: "/path/to/bbduk.sh"
+    megahit: "megahit"
+    bbduk: "bbduk.sh"
     # additional trim on adapter183 for clfr mrna lib
     adapter_ref_5p: True
     # additional trim on the cLFR SE600 3' linker (GTATCTGAGTCC)
@@ -162,28 +164,28 @@ params:
     adapter_ref_k: 18
     # >0: strip poly-A/T tails of at least this length after adapter trimming (0 = off)
     trim_polya: 0
-    bgzip: "/path/to/bgzip"
+    bgzip: "bgzip"
     # reference-free chimera detection for OLC post-assembly QC (no curated
     # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
     # chimeraQC_olc/combineQC_olc and denovo.md sec 26/29)
-    vsearch: "/path/to/vsearch"
+    vsearch: "vsearch"
     # ERCC spike-in analysis (required when running ercc_count/ercc_plot)
-    featurecounts: "/path/to/featureCounts"
-    ercc_gtf: "/path/to/ERCC92.gtf"
-    ercc_ref_gc: "/path/to/ercc_ref_gc.txt"
+    featurecounts: "featureCounts"
+    ercc_gtf: "ERCC92.gtf"
+    ercc_ref_gc: "ercc_ref_gc.txt"
 
     # exon2fasta combined-BC mode (required when bc_condition: 'combined')
-    jvarkit_samjdk: "/path/to/samjdk.jar"
+    jvarkit_samjdk: "samjdk.jar"
 
     # Mandalorion/SQANTI3 (required when modules.consensus_fasta: True)
-    mandalorion: "/path/to/Mando.py"
-    mandalorion_python: "/path/to/python"
-    mandalorion_gtf: "/path/to/gencode.annotation.gtf"
-    mandalorion_ref: "/path/to/genome.fa"
-    sqanti3_script: "/path/to/sqanti3_qc.py"
-    sqanti3_python: "/path/to/python"
-    sqanti3_cage_peak: "/path/to/human.refTSS.bed"
-    sqanti3_polyA_motif: "/path/to/polyA_motif.txt"
+    mandalorion: "Mando.py"
+    mandalorion_python: "python"
+    mandalorion_gtf: "gencode.annotation.gtf"
+    mandalorion_ref: "genome.fa"
+    sqanti3_script: "sqanti3_qc.py"
+    sqanti3_python: "python"
+    sqanti3_cage_peak: "human.refTSS.bed"
+    sqanti3_polyA_motif: "polyA_motif.txt"
 
 calc_frag:
     ########### start fill ###
@@ -211,12 +213,12 @@ frag_de_novo:
     run_parallel: False
     reads_per_BC: 50
     margin: 5
-    spades: "/path/to/spades.py"
+    spades: "spades.py"
     spades_phred_offset: 55
-    quast_dir: "/path/to/quast.py"
+    quast_dir: "quast.py"
     quast_min_contig: 100
     quast_space_efficient: True
-    minimap: "/path/to/minimap2"
+    minimap: "minimap2"
     denovo_type: 'correct_rc'
     end_idx:
     start_idx: 0
@@ -255,10 +257,10 @@ vc_polish:
     editing_bed: ""  # optional REDIportal-style BED of RNA-editing sites (A>G/T>C never reverted)
 
 benchmark:
-    benchmark_snp: "/path/to/hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"
-    benchmark_indel: "/path/to/hg38_GIAB_HG001/benchmark_indel.chrfix.vcf.gz"
-    bedfile: "/path/to/hg38_GIAB_HG001/benchmark_bed.chrfix.bed"
-    ref_sdf: "/path/to/hg38_benchmark_ref/GRCh38.sdf"
+    benchmark_snp: "hg38_GIAB_HG001/benchmark_snp.chrfix.vcf.gz"
+    benchmark_indel: "hg38_GIAB_HG001/benchmark_indel.chrfix.vcf.gz"
+    bedfile: "hg38_GIAB_HG001/benchmark_bed.chrfix.bed"
+    ref_sdf: "hg38_benchmark_ref/GRCh38.sdf"
     # /mnt/qnap-archive/ycai/src/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38_GIAB_HG002
     truth_vcf_dir: ""
     vcf_benchmark: ""

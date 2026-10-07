@@ -3,7 +3,10 @@
 #
 # Design: subsample (a ratio needs ~1-5M reads, not the whole library) -> ONE competitive
 # minimap2 pass against transcripts + rRNA + genome decoy -> per-read classification.
-#   build_genecode_ref        -> <genecode_transcripts dir>/*.transcripts_rRNA_decoy.fa.gz  (built once, shared by all samples)
+# The combined reference (transcripts + rRNA + genome decoy) is built once, outside this workflow, by
+# build_genecode_ref.sh and shared by all samples (params.genecode_ref, default: next to genecode_transcripts).
+# Input is params.genecode_trimmed_fq: an already split + trimmed fastq (a sample of the library is enough); this
+# workflow never starts from raw reads and does not run split_reads / trim_reads.
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
 #   subsample_reads_genecode  -> genecode/{id}.sub.fq.gz
 # Subsample modes (params.genecode_subsample_mode): 'head' (default) = first N reads (fast, file-order
@@ -13,50 +16,30 @@
 #   classify_reads_genecode   -> genecode/{id}.genecode_composition.tsv (+ _ambiguous.tsv)
 #   plot_composition_genecode -> genecode/{id}.genecode_composition.png (barplot, reads % and UMI %)
 # Reads and UMIs are both reported: rRNA is often deep per molecule, so the two can differ a lot.
+import os
+
 GENECODE_ID = config['samples']['id']
 GENECODE_THREADS = config['threads'].get('genecode_map', config['threads'].get('minimap_map', 24))
-# The combined reference is sample-independent: it is built ONCE next to the GENCODE files (same dir as
-# params.genecode_transcripts) and reused by every sample. params.genecode_ref overrides the location;
-# either way build_genecode_ref only runs when that file is missing (or an input is newer).
+# The combined reference is sample-independent: build_genecode_ref.sh writes it next to the GENCODE files (same dir
+# as params.genecode_transcripts) and every sample reuses it. params.genecode_ref overrides the location.
 _gc_tx = config['params'].get('genecode_transcripts', '')
+if not _gc_tx and not config['params'].get('genecode_ref'):
+    raise ValueError("minimap_genecode needs params.genecode_transcripts (and genecode_gtf) in this run's config.yaml, "
+                     "or a prebuilt params.genecode_ref; see config/config.yaml for the genecode_* block")
 GENECODE_REF = config['params'].get('genecode_ref') or (
     _gc_tx.replace('.transcripts.fa.gz', '.transcripts_rRNA_decoy.fa.gz') if _gc_tx.endswith('.transcripts.fa.gz')
     else _gc_tx + '.rRNA_decoy.fa.gz')
-GENECODE_RRNA = config['params'].get('genecode_rrna_fa', '')
-GENECODE_GENOME = config['params'].get('genecode_genome', '')
+# The reference is NOT built by this workflow (it is a ~1 GB one-off): run build_genecode_ref.sh once first.
+if not os.path.exists(GENECODE_REF):
+    raise ValueError("GENCODE combined reference not found: {}\nBuild it once with "
+                     "modules/clfr/align/build_genecode_ref.sh (transcripts + rRNA + genome decoy), or point "
+                     "params.genecode_ref at an existing file".format(GENECODE_REF))
 
 
-rule build_genecode_ref:
-    input:
-        transcripts = config['params'].get('genecode_transcripts', 'genecode_transcripts_not_configured'),
-        rrna = [GENECODE_RRNA] if GENECODE_RRNA else [],
-        genome = [GENECODE_GENOME] if GENECODE_GENOME else []
-    output:
-        ref = GENECODE_REF
-    shell:
-        """
-        set -euo pipefail
-        # GENCODE-style header (ENST|ENSG|-|-|tx|gene|len|biotype|); only the id and biotype fields are used.
-        hdr() {{ sed "s/^>\\([^ ]*\\).*/>\\1|\\1|-|-|\\1|\\1|0|$1|/"; }}
-        # write to .tmp then mv: other samples/jobs never see a half-written reference
-        TMP={output.ref}.tmp.$$
-        trap 'rm -f "$TMP"' EXIT
-        (
-            gzip -dc {input.transcripts}
-            if [ -n "{GENECODE_RRNA}" ]; then
-                (case "{GENECODE_RRNA}" in *.gz) gzip -dc "{GENECODE_RRNA}";; *) cat "{GENECODE_RRNA}";; esac) | hdr rRNA
-            else
-                echo "WARNING: genecode_rrna_fa not set; rRNA reads will not be countable" >&2
-            fi
-            if [ -n "{GENECODE_GENOME}" ]; then
-                (case "{GENECODE_GENOME}" in *.gz) gzip -dc "{GENECODE_GENOME}";; *) cat "{GENECODE_GENOME}";; esac) | hdr genome_decoy
-            else
-                echo "WARNING: genecode_genome not set; no genome decoy (genomic/intronic reads get forced onto transcripts)" >&2
-            fi
-        ) | gzip > $TMP
-        mv $TMP {output.ref}
-        """
-
+GENECODE_FQ = config['params'].get('genecode_trimmed_fq', '')
+if not GENECODE_FQ or not os.path.exists(GENECODE_FQ):
+    raise ValueError("params.genecode_trimmed_fq must point to an existing split + trimmed fastq(.gz): "
+                     "'{}'".format(GENECODE_FQ))
 
 GENECODE_SUB_MODE = config['params'].get('genecode_subsample_mode', 'head')
 if GENECODE_SUB_MODE not in ('umi', 'head', 'random'):
@@ -90,7 +73,7 @@ rule select_umis_genecode:
 
 rule subsample_reads_genecode:
     input:
-        fq = 'data/split_read_2_trimmed.fastq.gz',
+        fq = GENECODE_FQ,
         umis = "genecode/sampled_umis.txt" if GENECODE_SUB_MODE == 'umi' else []
     output:
         fq = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
