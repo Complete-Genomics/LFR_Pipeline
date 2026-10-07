@@ -37,12 +37,12 @@ def reformat_readid(chr_name, seq_type, input_bam, output_bam):
     
     for read in samfile:
         readid = read.query_name
+        if readid.endswith(("/1", "/2")):
+            readid = readid[:-2]
         umi = readid.split('#')[-1][:BC_LEN]
         pos = str(read.pos)
-        if seq_type=='pe':
-            read.query_name = '#'.join([umi,pos,read.query_name[:-2]])
-        elif seq_type=='se':
-            read.query_name = '#'.join([umi,pos,read.query_name])
+        if seq_type in ('pe', 'se'):
+            read.query_name = '#'.join([umi, pos, readid])
         else:
             print('needs SEQUENCE_TYPE')
         outfile.write(read)
