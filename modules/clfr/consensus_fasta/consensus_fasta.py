@@ -45,6 +45,7 @@ parser.add_argument("--downsample_ratio", type=float, default=1.0, required=Fals
 parser.add_argument("--batch_id", type=str, default="", required=False)
 parser.add_argument("--samtools", type=str, default=None, required=False)
 parser.add_argument("--temp_dir", type=str, default="/dev/shm", required=False)
+parser.add_argument("--stats_file", type=str, default=None, required=False)
 parser.add_argument("--use_samtools_reference", action="store_true")
 
 args = parser.parse_args()
@@ -60,6 +61,7 @@ DOWNSAMPLE_RATIO = args.downsample_ratio
 BATCH_ID = args.batch_id
 SAMTOOLS_ARG = args.samtools
 TEMP_DIR_PARENT = args.temp_dir
+STATS_FILE = args.stats_file
 USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
 
 if DOWNSAMPLE_RATIO <= 0 or DOWNSAMPLE_RATIO > 1:
@@ -530,9 +532,9 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         return None
 
     ASSEMBLED_READ_COUNT += len(reads_list_obj)
-    return f">{umi_id}_{chrom}\n{combined_seq}\n"
+    return f">{umi_id}_{len(reads_list_obj)}_{chrom}\n{combined_seq}\n"
 
-def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, output_fasta_file, start_index, end_index):
+def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, output_fasta_file, start_index, end_index, stats_file=None):
     """Generate consensus sequences for each UMI from a read ID-sorted BAM file in a single thread."""
     if not os.path.exists(input_bam):
         sys.stderr.write(f"ERROR: Input BAM file '{input_bam}' does not exist.\n")
@@ -622,6 +624,13 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
         sys.stderr.write(
             f"Skipped {UMI_SPAN_SANITY_EXCEEDED_COUNT} UMI groups exceeding the span sanity limit.\n"
         )
+    if stats_file:
+        with open(stats_file, "w") as stats_handle:
+            stats_handle.write(
+                "chrom\tsplit_index\tconsensus_assembled_reads\t"
+                "consensus_assembled_umi_groups\n"
+            )
+            stats_handle.write(f"{chrom}\t{split_index}\t{ASSEMBLED_READ_COUNT}\t{umi_count}\n")
     sys.stderr.write(f"Consensus assembled reads: {ASSEMBLED_READ_COUNT}\n")
     sys.stderr.write(f"Consensus assembled UMI groups: {umi_count}\n")
     sys.stderr.write(f"Processing complete. All consensus sequences written to '{output_fasta_file}'.\n")
@@ -644,4 +653,6 @@ if __name__ == "__main__":
 
 
 
-    generate_consensus_sequential_to_single_file(input_bam_file, reference_fasta_file, output_fasta_file, start_index, end_index)
+    generate_consensus_sequential_to_single_file(
+        input_bam_file, reference_fasta_file, output_fasta_file, start_index, end_index, STATS_FILE
+    )

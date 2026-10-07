@@ -83,7 +83,8 @@ rule get_consensus_fasta:
         bam="Align/tmp/{id}_{chr}.name.sort.bam", 
         chr_dict = "Align/samtools_idx.txt"     
     output:
-        "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.fasta"
+        fasta = "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.fasta",
+        stats = "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.assembly_counts.tsv"
     threads: 1
     params:
         python = config['params']['general_python'],
@@ -100,12 +101,13 @@ rule get_consensus_fasta:
                     "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta.py",
                     "--bam {input.bam}",
                     "--ref_fasta {params.ref}",
-                    "--output_fasta {output}",
+                    "--output_fasta {output.fasta}",
                     "--chrom {wildcards.chr}",
                     "--dict_file {input.chr_dict}",
                     "--split_index {wildcards.split_idx}",
                     "--min_reads {params.min_reads}",
                     "--downsample_ratio {params.downsample_ratio}",
+                    "--stats_file {output.stats}",
                     "--samtools {params.samtools}"
                     ] 
         if params.use_samtools_reference:
@@ -147,9 +149,14 @@ rule merge_consensus_fasta:
 
 rule fasta_frag_len_distribution_consensus:
     input:
-        "consensus/consensus.fasta"
+        fasta = "consensus/consensus.fasta",
+        stats = expand(
+            "consensus/tmp/{chr}/{id}_{chr}_{i}.assembly_counts.tsv",
+            id=config['samples']['id'], chr=CHROMS, i=split_cnt
+        )
     output:
-        "consensus/consensus_frag_length_distribution.png",
+        png = "consensus/consensus_frag_length_distribution.png",
+        stats = "consensus/consensus_assembly_counts.tsv"
         # "Align/frag_length_distribution.txt"
     params:
         python = config['params']['general_python'],
@@ -158,9 +165,35 @@ rule fasta_frag_len_distribution_consensus:
     benchmark:
         "Benchmarks/consensus_fasta.fasta_frag_len_distribution.txt"
     run:
+        assembled_reads = 0
+        assembled_umi_groups = 0
+        with open(output.stats, "w") as merged_stats:
+            merged_stats.write(
+                "chrom\tsplit_index\tconsensus_assembled_reads\t"
+                "consensus_assembled_umi_groups\n"
+            )
+            for stats_file in input.stats:
+                with open(stats_file) as stats_handle:
+                    header = next(stats_handle).rstrip("\n")
+                    expected_header = (
+                        "chrom\tsplit_index\tconsensus_assembled_reads\t"
+                        "consensus_assembled_umi_groups"
+                    )
+                    if header != expected_header:
+                        raise ValueError(f"Unexpected consensus stats header in {stats_file}: {header}")
+                    line = next(stats_handle).rstrip("\n")
+                    chrom, split_idx, reads, umi_groups = line.split("\t")
+                    assembled_reads += int(reads)
+                    assembled_umi_groups += int(umi_groups)
+                    merged_stats.write(line + "\n")
+            merged_stats.write(
+                f"all\tall\t{assembled_reads}\t{assembled_umi_groups}\n"
+            )
+        print(f"Consensus assembled reads: {assembled_reads}")
+        print(f"Consensus assembled UMI groups: {assembled_umi_groups}")
         command = ["{params.python}",
                     "{params.src_dir}/modules/clfr/consensus_fasta/exon2fasta.py",
-                    "--fasta {input}",
+                    "--fasta {input.fasta}",
                     "--outdir consensus/",
                     "--name consensus",
                     "--minreads_fasta {params.minreads_fasta}",
