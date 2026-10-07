@@ -113,6 +113,7 @@ if USE_SAMTOOLS_REFERENCE and not SAMTOOLS_CONSENSUS_HAS_REF:
 log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENSUS_USES_REF)
 EMPTY_CONSENSUS_COUNT = 0
 UMI_SPAN_SANITY_EXCEEDED_COUNT = 0
+ASSEMBLED_READ_COUNT = 0
 
 # MIN_READS = 50
 # temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
@@ -387,7 +388,7 @@ def get_2bp_sequence_pysam(chrom, start, end):
 
 def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
     """Process a UMI group's reads to generate a consensus sequence."""
-    global EMPTY_CONSENSUS_COUNT, UMI_SPAN_SANITY_EXCEEDED_COUNT
+    global ASSEMBLED_READ_COUNT, EMPTY_CONSENSUS_COUNT, UMI_SPAN_SANITY_EXCEEDED_COUNT
     
     if not reads_list_obj:
         sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no reads data, skipping.\n")
@@ -528,6 +529,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' combined sequence {len(combined_seq)}bp < {MIN_FRAG_LEN}bp, skipping.\n")
         return None
 
+    ASSEMBLED_READ_COUNT += len(reads_list_obj)
     return f">{umi_id}_{chrom}\n{combined_seq}\n"
 
 def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, output_fasta_file, start_index, end_index):
@@ -620,6 +622,8 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
         sys.stderr.write(
             f"Skipped {UMI_SPAN_SANITY_EXCEEDED_COUNT} UMI groups exceeding the span sanity limit.\n"
         )
+    sys.stderr.write(f"Consensus assembled reads: {ASSEMBLED_READ_COUNT}\n")
+    sys.stderr.write(f"Consensus assembled UMI groups: {umi_count}\n")
     sys.stderr.write(f"Processing complete. All consensus sequences written to '{output_fasta_file}'.\n")
 
     # Clean up the specific temporary directory created by this run
