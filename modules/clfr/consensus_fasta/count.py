@@ -46,13 +46,13 @@ def successful_groups(consensus_fasta):
     return groups
 
 
-def umi_from_read_name(read_name):
+def umi_variants_from_read_name(read_name):
     if "#" not in read_name:
-        return None
+        return ()
     umi = read_name.rsplit("#", 1)[1]
     if umi.endswith(("/1", "/2")):
-        umi = umi[:-2]
-    return umi or None
+        return umi, umi[:-2]
+    return (umi,) if umi else ()
 
 
 def mapped_reads_from_idxstats(idxstats_path):
@@ -74,8 +74,8 @@ def count_assembled_reads(bam_path, groups):
         for read in bam.fetch(until_eof=True):
             if read.is_unmapped:
                 continue
-            umi = umi_from_read_name(read.query_name)
-            if umi is not None and (umi, normalized_chromosome(read.reference_name)) in groups:
+            chrom = normalized_chromosome(read.reference_name)
+            if any((umi, chrom) in groups for umi in umi_variants_from_read_name(read.query_name)):
                 assembled_reads += 1
 
     return assembled_reads
