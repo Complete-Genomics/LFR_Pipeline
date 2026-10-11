@@ -5,8 +5,8 @@
 # minimap2 pass against transcripts + rRNA + genome decoy -> per-read classification.
 # The combined reference (transcripts + rRNA + genome decoy) is built once, outside this workflow, by
 # build_genecode_ref.sh and shared by all samples (params.genecode_ref, default: next to genecode_transcripts).
-# Input is params.genecode_trimmed_fq: an already split + trimmed fastq (a sample of the library is enough); this
-# workflow never starts from raw reads and does not run split_reads / trim_reads.
+# Input is params.genecode_trimmed_fq (a small already-trimmed slice is enough); blank = data/split_read_2_trimmed.fastq.gz,
+# which makes snakemake run split_reads / trim_reads over the whole library first.
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
 #   subsample_reads_genecode  -> genecode/{id}.sub.fq.gz
 # Subsample modes (params.genecode_subsample_mode): 'head' (default) = first N reads (fast, file-order
@@ -36,8 +36,10 @@ if not os.path.exists(GENECODE_REF):
                      "params.genecode_ref at an existing file".format(GENECODE_REF))
 
 
-GENECODE_FQ = config['params'].get('genecode_trimmed_fq', '')
-if not GENECODE_FQ or not os.path.exists(GENECODE_FQ):
+# Blank -> the pipeline's own trimmed SE600 read (split_reads + trim_reads run on demand over the full library).
+# A given path must exist: point it at a small pre-trimmed slice to skip split/trim.
+GENECODE_FQ = config['params'].get('genecode_trimmed_fq') or "data/split_read_2_trimmed.fastq.gz"
+if config['params'].get('genecode_trimmed_fq') and not os.path.exists(GENECODE_FQ):
     raise ValueError("params.genecode_trimmed_fq must point to an existing split + trimmed fastq(.gz): "
                      "'{}'".format(GENECODE_FQ))
 
@@ -54,7 +56,7 @@ rule select_umis_genecode:
     output:
         "genecode/sampled_umis.txt"
     params:
-        min_reads = config['params'].get('genecode_umi_min_reads', 25),
+        min_reads = config['params']['reads_per_BC'],
         n_umis = config['params'].get('genecode_umi_n', 50000),
         seed = config['params'].get('genecode_subsample_seed', 100)
     shell:
@@ -78,7 +80,7 @@ rule subsample_reads_genecode:
     output:
         fq = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
     params:
-        n = config['params'].get('genecode_subsample_reads', 2000000),
+        n = config['params'].get('genecode_subsample_reads', 400000),
         seed = config['params'].get('genecode_subsample_seed', 100),
         mode = GENECODE_SUB_MODE,
         seqtk = config['params'].get('seqtk', 'seqtk'),

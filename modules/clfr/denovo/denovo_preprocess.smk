@@ -18,7 +18,7 @@ rule select_denovo_barcodes:
     output:
         "denovo/filtered_barcode_freq.txt"
     params:
-        reads_per_BC = config['frag_de_novo']['reads_per_BC']
+        reads_per_BC = config['params']['reads_per_BC']
     shell:
         """
         mkdir -p denovo

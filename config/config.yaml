@@ -50,6 +50,8 @@ modules:
 
 params:
     ########### start fill ###
+    # min reads per barcode/UMI; shared by consensus, denovo and genecode umi mode (25 = consensus threshold)
+    reads_per_BC: 25
     downsample_ratio: 1.0
     batch_id: ""
     # Pass -T ref.fa to samtools consensus. Disabled by default because it can be slow.
@@ -82,6 +84,14 @@ params:
     additional_bc_len: 0
     additional_bc_len_r1: 0
     adapter_len: 0
+    # cLFR random_bc / random_bc_umi_rc only. >1: cut the input into this many slices and run
+    # split_barcode_LFR.py on all of them at once (split_barcode_LFR_parallel.py); outputs and
+    # split_stat_read1.log are identical to a single run. 0 (or 1) = no slicing, single process.
+    # Only worth it for very large inputs (~300G+); set e.g. 4 for those runs.
+    # Needs free disk for the slices (~ one extra copy of R2) and threads >= split_parts.
+    split_parts: 0
+    # read pairs in the input; set it to skip the extra counting pass over R2 (0 = count)
+    split_total_reads: 0
     ########### end fill ###
 
     splitNfq: 32
@@ -125,7 +135,7 @@ params:
     # Optional prebuilt indexes. Build minimap2_index with -x splice:sr and
     # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
     minimap2_index: ""
-    minimap2_mrna_index: ""
+    minimap2_mrna_index: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"   # consensus map_fasta_consensus (-x asm20) -> GENCODE; blank = ref_fa_mrna
     # ---- mrna_mapper 'minimap_genecode' (modules/clfr/align/genecode.smk) ----
     # The combined reference (transcripts + rRNA + genome decoy) is sample-independent and is NOT built by the
     # workflow: run modules/clfr/align/build_genecode_ref.sh once (-t genecode_transcripts -r genecode_rrna_fa
@@ -134,7 +144,8 @@ params:
     # rRNA is largely absent from GENCODE: without the rRNA fasta (e.g. NCBI NR_046235 45S + NR_023363 5S)
     # rRNA reads cannot be counted; without the genome (GRCh38.primary_assembly, decoy) genomic/intronic
     # reads get forced onto transcripts.
-    # Input: an already split + trimmed SE600 fastq (the workflow does not start from raw reads). Required.
+    # Input: split + trimmed SE600 fastq. Blank = data/split_read_2_trimmed.fastq.gz (the pipeline's own split_reads +
+    # trim_reads output, built on demand over the FULL library); on big data point this at a small pre-trimmed slice instead.
     genecode_trimmed_fq: ""
     genecode_ref: ""
     genecode_transcripts: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"
@@ -146,8 +157,7 @@ params:
     # umi: sample whole UMIs (all reads of each kept; set explicitly, needed for UMI-level %; one full awk pass).
     genecode_subsample_mode: "head"
     genecode_umi_n: 50000              # umi mode: UMIs to sample
-    genecode_umi_min_reads: 25         # umi mode: only UMIs with >= this many reads (25 = consensus threshold; 1 = whole library, mostly noise UMIs)
-    genecode_subsample_reads: 2000000  # head/random mode: reads to keep
+    genecode_subsample_reads: 400000   # head/random mode: reads to keep
     genecode_subsample_seed: 100
     genecode_min_cov: 0.8
     # samtools sort memory limit per sorting/compression thread.
@@ -211,7 +221,6 @@ frag_de_novo:
     assembler: olc   # megahit | olc (pure-Python OLC, no subprocess fork)
     assembly_N_umi: 1000    # empty = denovo all UMIs; set an int to cap for debug/smoke test
     run_parallel: False
-    reads_per_BC: 50
     margin: 5
     spades: "spades.py"
     spades_phred_offset: 55

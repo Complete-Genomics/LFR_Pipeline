@@ -91,7 +91,7 @@ rule get_consensus_fasta:
         src_dir = config['params']['src_dir'], 
         ref = config['params']['ref_fa'],
         samtools = config['params'].get('samtools', 'samtools'),
-        min_reads = config['frag_de_novo']['reads_per_BC'],
+        min_reads = config['params']['reads_per_BC'],
         downsample_ratio = config['params'].get('downsample_ratio', 1.0),
         use_samtools_reference = config['params'].get('use_samtools_reference', False)
     benchmark:
