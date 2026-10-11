@@ -7,8 +7,9 @@ SEQUENCE_TYPE =config['params']['sequence_type'].lower()
 MRNA_MAPPER = config['params']['mrna_mapper'].lower()
 if MRNA_MAPPER == 'minimap':
     MRNA_MAPPER = 'minimap2'
-# 'minimap_genecode' (SE600 composition vs GENCODE) is explicit and not overridden by read_len
-if config['params']['library_type'] == 'mrna' and MRNA_MAPPER != 'minimap_genecode':
+# modules.genecode (SE600 composition vs GENCODE) is independent of the mapper chosen here
+GENECODE = bool(config['modules'].get('genecode', False))
+if config['params']['library_type'] == 'mrna':
     MRNA_MAPPER = 'minimap2' if config['params']['read_len'] > 150 else 'hisat2'
 # Define the ref based on the config file
 # Sort of acts like a global variable so you don't need to always type the whole thing
@@ -51,10 +52,10 @@ else:
 def run_all_input(wildcards):
     run_all_files = ["data/split_read.2.fq.gz"]
 
-    # GENCODE composition mode: only map to GENCODE; the genome-based downstream does not apply
-    if MRNA_MAPPER == 'minimap_genecode':
-        return ["genecode/{}.genecode_composition.tsv".format(config['samples']['id']),
-                "genecode/{}.genecode_composition.png".format(config['samples']['id'])]
+    # GENCODE composition: additive target; set modules.mapping etc. to False for a composition-only run
+    if GENECODE:
+        run_all_files.extend(["genecode/{}.genecode_composition.tsv".format(config['samples']['id']),
+                              "genecode/{}.genecode_composition.png".format(config['samples']['id'])])
 
     if config['modules']['mapping']==True:
         run_all_files.extend(["keep/Align/{}.sort.bam".format(config['samples']['id']),])
@@ -163,9 +164,9 @@ mrna_mapper = MRNA_MAPPER
 include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
-if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap_genecode':
+if GENECODE:
     include: src_dir+"modules/clfr/align/genecode.smk"
-elif config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
+if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
     if config['params'].get('minimap_parallel_split', False):
         include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
     else:

@@ -1,5 +1,5 @@
 # clfr, se600: library composition against GENCODE (protein_coding / lncRNA / rRNA / globin / ...).
-# Selected by params.mrna_mapper == 'minimap_genecode' (workflows/clfr.smk; run_all = composition TSV).
+# Independent module: enabled by modules.genecode (workflows/clfr.smk adds the composition TSV/PNG to run_all).
 #
 # Design: subsample (a ratio needs ~1-5M reads, not the whole library) -> ONE competitive
 # minimap2 pass against transcripts + rRNA + genome decoy -> per-read classification.
@@ -24,7 +24,7 @@ GENECODE_THREADS = config['threads'].get('genecode_map', config['threads'].get('
 # as params.genecode_transcripts) and every sample reuses it. params.genecode_ref overrides the location.
 _gc_tx = config['params'].get('genecode_transcripts', '')
 if not _gc_tx and not config['params'].get('genecode_ref'):
-    raise ValueError("minimap_genecode needs params.genecode_transcripts (and genecode_gtf) in this run's config.yaml, "
+    raise ValueError("modules.genecode needs params.genecode_transcripts (and genecode_gtf) in this run's config.yaml, "
                      "or a prebuilt params.genecode_ref; see config/config.yaml for the genecode_* block")
 GENECODE_REF = config['params'].get('genecode_ref') or (
     _gc_tx.replace('.transcripts.fa.gz', '.transcripts_rRNA_decoy.fa.gz') if _gc_tx.endswith('.transcripts.fa.gz')

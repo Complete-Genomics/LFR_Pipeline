@@ -19,6 +19,7 @@ samples:
     # cLFR with ERCC: add ERCC-00130, ERCC-00096, ERCC-00116, ERCC-00025
 
 modules:
+    genecode: True
     ### start fill ### for standard analysis set True: BCsplit, mapping, eval_metrics
     BCsplit: True
     mapping: True
@@ -36,6 +37,9 @@ modules:
     # Shadow-only resource recommendations from completed benchmark history.
     # It never changes rule threads, memory, or runtime requests.
     resource_allocation: False
+    # cLFR SE600: library composition vs GENCODE (protein_coding / lncRNA / rRNA / globin ...), modules/clfr/align/genecode.smk.
+    # Additive and independent of mrna_mapper; set mapping/consensus_fasta False for a composition-only run.
+    genecode: False
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###
@@ -58,9 +62,8 @@ params:
     use_samtools_reference: False
     correct_rc: True
     # cLFR mRNA mapper is selected by read_len: <=150 uses HISAT2; >150 uses minimap2. gDNA uses BWA.
-    # 'minimap_genecode' overrides that: SE600 reads -> GENCODE (run_all = genecode BAM only, rule map_reads_minimap_genecode).
-    # 'minimap2' -> map_reads_minimap (genome).
-    mrna_mapper: 'minimap_genecode'
+    # 'minimap2' -> map_reads_minimap (genome). GENCODE composition is a separate module: modules.genecode.
+    mrna_mapper: 'minimap2'
     library_species: 'human'
     ref_id: ''
     # 'gdna' (map with BWA) or 'mrna' (map with STAR/minimap2)
@@ -136,7 +139,7 @@ params:
     # minimap2_mrna_index with -x asm20; leave blank to use the FASTA directly.
     minimap2_index: ""
     minimap2_mrna_index: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"   # consensus map_fasta_consensus (-x asm20) -> GENCODE; blank = ref_fa_mrna
-    # ---- mrna_mapper 'minimap_genecode' (modules/clfr/align/genecode.smk) ----
+    # ---- modules.genecode (modules/clfr/align/genecode.smk) ----
     # The combined reference (transcripts + rRNA + genome decoy) is sample-independent and is NOT built by the
     # workflow: run modules/clfr/align/build_genecode_ref.sh once (-t genecode_transcripts -r genecode_rrna_fa
     # -g genecode_genome); it writes gencode.v50.transcripts_rRNA_decoy.fa.gz next to genecode_transcripts, which
