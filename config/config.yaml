@@ -19,7 +19,6 @@ samples:
     # cLFR with ERCC: add ERCC-00130, ERCC-00096, ERCC-00116, ERCC-00025
 
 modules:
-    genecode: True
     ### start fill ### for standard analysis set True: BCsplit, mapping, eval_metrics
     BCsplit: True
     mapping: True
@@ -39,7 +38,7 @@ modules:
     resource_allocation: False
     # cLFR SE600: library composition vs GENCODE (protein_coding / lncRNA / rRNA / globin ...), modules/clfr/align/genecode.smk.
     # Additive and independent of mrna_mapper; set mapping/consensus_fasta False for a composition-only run.
-    genecode: False
+    genecode: True
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###

@@ -118,7 +118,10 @@ def classify_read(recs, gtf, cache, min_cov, tie_frac):
         score = r.get_tag('AS') if r.has_tag('AS') else a
         scored.append((score, a, total, r))
     best = max(s[0] for s in scored)
-    top = [s for s in scored if s[0] >= tie_frac * best]
+    # best - (1-tie_frac)*|best|, not tie_frac*best: AS can be <= 0 (minimap2 DP score of a poor alignment), and
+    # for best < 0 tie_frac*best > best would leave no record at all
+    cutoff = best - (1.0 - tie_frac) * abs(best)
+    top = [s for s in scored if s[0] >= cutoff]
     # read length: the primary record keeps SEQ, so its clipped length is the read length
     read_len = max(s[2] for s in scored)
     if max(s[1] for s in top) < min_cov * read_len:
