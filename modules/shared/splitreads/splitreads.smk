@@ -232,12 +232,19 @@ rule split_reads:
         gdna_start_r1 = config['params']['gdna_start_r1'], 
         additional_bc_len_r1 = config['params']['additional_bc_len_r1'],
         adapter_len = config['params']['adapter_len'], 
+        # split_parts > 1: cut the input into that many slices and split them in parallel
+        # (cLFR random_bc* only; see split_barcode_LFR_parallel.py). 1 = single process.
+        split_script = ("split_barcode_LFR_parallel.py" if int(config['params'].get('split_parts', 1)) > 1
+                        else "split_barcode_LFR.py"),
+        split_extra = ("--parts {} --total_reads {}".format(int(config['params']['split_parts']),
+                                                          int(config['params'].get('split_total_reads') or 0))
+                       if int(config['params'].get('split_parts', 1)) > 1 else ""),
     threads:
         config['threads']['split_group']
     run:
         if config['modules']['BCsplit']==True:
             if config['params']['bc_condition'] == 'random_bc_umi_rc':
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/{params.split_script} {params.split_extra} "
                 "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                 "--cbc_len {params.cbc_len} --bc_len_redundant {params.bc_len_redundant} "
                 "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
@@ -246,7 +253,7 @@ rule split_reads:
                 "--additional_bc_len_r1 {params.additional_bc_len_r1} --reverse_complement --threads {threads} "
                 "2> data/split_stat_read.err")
             elif config['params']['bc_condition'] == 'random_bc':
-                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py "
+                shell("{params.general_python} {params.src_dir}/modules/shared/splitreads/{params.split_script} {params.split_extra} "
                 "--r1 {input[0]} --r2 {input[1]} --read_len {params.r2_len} --output data/split_read "
                 "--cbc_len {params.cbc_len} --bc_len_redundant {params.bc_len_redundant} "
                 "--bc_start {params.bc_start} --gdna_start {params.gdna_start} "
