@@ -161,7 +161,7 @@ params:
     genecode_umi_n: 50000              # umi mode: UMIs to sample
     genecode_subsample_reads: 400000   # head/random mode: reads to keep
     genecode_subsample_seed: 100
-    genecode_min_cov: 0.8
+    genecode_min_cov: 0.5   # best hit must cover >= this fraction of the read, else low_cov (0.8 was too strict for SE600 3' quality decay)
     # samtools sort memory limit per sorting/compression thread.
     minimap_sort_mem: "2G"
 

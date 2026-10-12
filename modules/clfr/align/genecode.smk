@@ -145,7 +145,7 @@ rule classify_reads_genecode:
     params:
         script = config['params']['src_dir'] + "modules/clfr/align/genecode_classify.py",
         gtf = config['params'].get('genecode_gtf', ''),
-        min_cov = config['params'].get('genecode_min_cov', 0.8)
+        min_cov = config['params'].get('genecode_min_cov', 0.5)
     shell:
         """
         set -euo pipefail

@@ -142,8 +142,8 @@ def main():
     ap.add_argument('--out', required=True, help='composition TSV')
     ap.add_argument('--out_ambiguous', required=True, help='ambiguous class-combination TSV')
     ap.add_argument('--gtf', default='', help='GENCODE annotation GTF(.gz) for gene_type; optional')
-    ap.add_argument('--min_cov', type=float, default=0.8,
-                    help='best hit must cover >= this fraction of the read (default 0.8)')
+    ap.add_argument('--min_cov', type=float, default=0.5,
+                    help='best hit must cover >= this fraction of the read (default 0.5)')
     ap.add_argument('--tie_frac', type=float, default=0.99,
                     help='hits with AS >= tie_frac*best AS count as best hits (default 0.99)')
     a = ap.parse_args()
