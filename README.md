@@ -51,7 +51,7 @@ CGI_LFR_pipeline/
 │   │   ├── calc_frag_len/  # fragment length statistics
 │   │   └── bcgdna/         # BCgDNA troubleshooting
 │   └── clfr/               # cLFR-specific modules
-│       ├── align/          # BWA / minimap2 alignment
+│       ├── align/          # BWA / minimap2 alignment; genecode.smk = GENCODE composition + QC
 │       ├── calc_frag_len/  # fragment length statistics
 │       ├── exon2fasta/     # N≥100 reads/fragment filter + coverage analysis
 │       ├── consensus_fasta/# mRNA isoform consensus FASTA
@@ -119,6 +119,7 @@ flowchart TD
 
     subgraph SH["modules / shared"]
         split["splitreads\nSplit random UMI\nsplit_read.N.fq.gz"]
+        trim["splitreads\ntrim_reads (bbduk)\nsplit_read_2_trimmed.fastq.gz"]
         met["metrics\nAlignment metrics\nsummary_report.txt"]
         vc["variant_calling\nGATK haplotyper\ngatk.vcf"]
         bench["variant_calling\nBenchmark SNP / indel"]
@@ -134,9 +135,15 @@ flowchart TD
         consensus["consensus_fasta\nConsensus FASTA\nconsensus.fasta"]
         rna["rna_16s\n16S abundance\nabundance_align_ref.png"]
         denovo["denovo\nDe novo assembly\nfrag_de_novo/"]
+        gcsub["genecode\nSubsample reads\nhead 400k"]
+        gcmap["genecode\nminimap2 vs transcripts\n+ rRNA + genome decoy"]
+        gccls["genecode\nClassify reads\ncomposition.tsv · ambiguous.tsv"]
+        gcqc["genecode QC\nclip length distribution\ngenecode_clip.tsv"]
+        gcplot["genecode\nComposition barplot\ncomposition.png"]
     end
 
     raw --> agg --> split --> map
+    split --> trim
     map --> supp --> met
     supp -.-> exon
     exon -.-> frag
@@ -149,10 +156,41 @@ flowchart TD
     consensus -.->|completed benchmark| allocdata
     denovo -.->|completed benchmark| allocdata
     allocdata -.->|shadow-only input| alloc
+    trim -.->|modules.genecode| gcsub
+    gcsub --> gcmap --> gccls
+    gccls --> gcplot
+    gccls --> gcqc
 
     classDef opt fill:#dce8f5,stroke:#6ca3c8,color:#1a3a5c
-    class exon,frag,consensus,rna,denovo,vc,bench,alloc opt
+    class exon,frag,consensus,rna,denovo,vc,bench,alloc,gcsub,gcmap,gccls,gcqc,gcplot opt
 ```
+
+### GENCODE composition and QC (`modules.genecode`, cLFR SE600)
+
+An independent, additive module (`modules/clfr/align/genecode.smk`): it estimates what the library is made of (protein_coding / lncRNA / globin / rRNA / ...) from a **subsample** of the trimmed reads, and reports QC on how cleanly they align. It shares `split_reads` and `trim_reads` with the rest of the pipeline but does **not** feed `consensus_fasta`, which needs the full-library, coordinate-sorted genome alignment (`mrna_mapper`). Enable it with `modules.genecode: True` in `config.yaml`; set `mapping` / `consensus_fasta` to `False` for a composition-only run.
+
+- **Reference** — one combined fasta (GENCODE transcripts + human rRNA + GRCh38 genome decoy, ~1 GB), built once and shared by all samples: `modules/clfr/align/build_genecode_ref.sh -t transcripts.fa.gz -r human_rRNA.fa -g genome.fa.gz`. It is written next to `genecode_transcripts` as `*.transcripts_rRNA_decoy.fa.gz`; the workflow stops with a message if it is missing.
+- **Input** — `genecode_trimmed_fq` (a small pre-trimmed slice is enough). Blank falls back to `data/split_read_2_trimmed.fastq.gz`, which makes snakemake split and trim the **whole** library first.
+- **Subsample** — `genecode_subsample_mode: head` (default, fast but file-order dependent) / `random` (seqtk, unbiased) / `umi`; `genecode_subsample_reads: 400000`. For a class at fraction *p*, the 95% relative error is about 1.96·√((1−p)/(n·p)): 400k reads give ±6% at 1%, ±19% at 0.1%.
+- **Mapping** — one competitive `minimap2 -ax map-ont -k15 -w10 -N50 -p0.9 --secondary=yes` against the combined reference; near-best secondary hits are kept so multi-class reads can be flagged.
+
+| Output (`genecode/`) | Content |
+|---|---|
+| `{id}.genecode_composition.tsv` / `.png` | % of reads and % of UMIs per class |
+| `{id}.genecode_ambiguous.tsv` | which class combinations compete for ambiguous reads |
+| `{id}.genecode_clip.tsv` | soft-clip length distribution of each read's best hit, per class and read end (`5p` / `3p`, read orientation; bins 0, 1-9, 10-24, 25-49, 50-99, 100-199, 200-399, 400+) |
+
+**Reading the QC**
+
+| Class | Meaning | Points at |
+|---|---|---|
+| `unmapped` | no alignment | read quality / contamination |
+| `low_cov` | best hit covers < `genecode_min_cov` (0.5) of the read; checked first, class is not looked at | read problems: adapter / polyA / low-quality 3' tail |
+| `ambiguous` | coverage is fine but equally good hits fall in **different** classes (several isoforms of one class do not count; a genome_decoy tie yields to the transcript) | homologous / overlapping genes in the reference, not read quality |
+
+`genecode_min_cov` is deliberately permissive (0.5) because SE600 quality decays toward the 3' end, so `low_cov` is not a reliable trim-quality indicator. Use `genecode_clip.tsv` for that: the share of reads with a long 3' clip (e.g. ≥ 50 bp) measures how much unaligned tail survives trimming. Adapter and polyA residue can be checked separately with `src/tools/qc_adapter_scan.sh` and `src/tools/qc_quality_scan.py`.
+
+Limits: a read's class is decided from its best hits only (class level, not isoform level); `-N 50` can truncate the candidate list for highly repetitive reads; and `head` sampling inherits any ordering bias in the input file.
 
 ## Installation
 
