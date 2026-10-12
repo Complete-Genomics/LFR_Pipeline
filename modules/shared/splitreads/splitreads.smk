@@ -371,13 +371,29 @@ rule trim_reads:
         trim_3p_linker = str(config['params'].get('adapter_ref_3p', False)).strip().lower() in ("true", "1", "yes"),
         adapter_ref_3p_file = config['params'].get('adapter_ref_3p_file', ''),
         # >0: after adapter trimming, strip poly-A/T tails of at least this length (0 = off)
-        trim_polya = int(config['params'].get('trim_polya', 0))
+        trim_polya = int(config['params'].get('trim_polya', 0)),
+        # quality trim of the adapter/qtrim pass: bbduk qtrim=rl trimq (6 = bbduk default, the old behaviour) and
+        # maq (discard reads whose average quality after trimming is below this; 0 = off). Choose per batch with
+        # src/tools/qc_quality_scan.py
+        trim_q = int(config['params'].get('trim_q', 6)),
+        trim_maq = int(config['params'].get('trim_maq', 0)),
+        # per-batch switches that used to need a hand-written trim.sh; every default = the previous behaviour
+        # trim_mgi_adapter: false skips the 3' MGI adapter k-mer pass (adapter_ref cannot be emptied: bootstrap re-defaults it)
+        trim_mgi = str(config['params'].get('trim_mgi_adapter', True)).strip().lower() in ("true", "1", "yes"),
+        # trim_qtrim: false = no quality trimming at all (trim_q is then ignored)
+        trim_qtrim = str(config['params'].get('trim_qtrim', True)).strip().lower() in ("true", "1", "yes"),
+        # restrictleft of the 5' adapter183 pass: it must cover where adapter183 sits (30 = old value; 40 for split
+        # SE600 reads, 70 for raw 625 bp reads)
+        trim_5p_restrict_left = int(config['params'].get('trim_5p_restrict_left', 30)),
+        trim_minlen = int(config['params'].get('trim_minlen', 10)),
+        # maxns of the main pass: reads with more N are dropped; -1 = off. Default: 0 for SE, off for PE (as before)
+        trim_maxns = int(config['params'].get('trim_maxns', 0 if SEQUENCE_TYPE == 'se' else -1))
     benchmark:
         "Benchmarks/consensus_fasta.trim_reads.txt"
     shell:
         """
         ADAPTER_ARGS=""
-        if [[ -n "{params.adapter_ref}" ]]; then
+        if [[ -n "{params.adapter_ref}" && "{params.trim_mgi}" == "True" ]]; then
             ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k={params.adapter_ref_k} hdist=1"
         fi
 
@@ -386,20 +402,25 @@ rule trim_reads:
         # or re-read. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
         if [[ "{params.sequence_type}" == "pe" ]]; then
             ORIG_IN="in1={input.f1} in2={input.f2}"; PIPE_IN="in=stdin.fq int=t"
-            FINAL_OUT="out1={output.t1} out2={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS="qtrim=rl"
+            FINAL_OUT="out1={output.t1} out2={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS=""
         elif [[ "{params.sequence_type}" == "se" ]]; then
             ORIG_IN="in={input.f2}"; PIPE_IN="in=stdin.fq int=f"
-            FINAL_OUT="out={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS="qtrim=rl maxns=0"
+            FINAL_OUT="out={output.t2}"; MID_OUT="out=stdout.fq"; MAIN_ARGS=""
             touch {output.t1}
         else
             echo "Unknown type {params.sequence_type}" >&2;
             exit 1;
         fi
 
+        if [[ "{params.trim_qtrim}" == "True" ]]; then MAIN_ARGS="qtrim=rl trimq={params.trim_q}"; fi
+        if [[ {params.trim_maxns} -ge 0 ]]; then MAIN_ARGS="$MAIN_ARGS maxns={params.trim_maxns}"; fi
+        MAIN_ARGS="$MAIN_ARGS minlen={params.trim_minlen}"
+        if [[ {params.trim_maq} -gt 0 ]]; then MAIN_ARGS="$MAIN_ARGS maq={params.trim_maq}"; fi
+
         CMD=""
         MAIN_IN="$ORIG_IN"
         if [[ "{params.trim_5p_contam}" == "True" ]]; then
-            CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft=30 ref={params.adapter_ref_5p_file} | "
+            CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft={params.trim_5p_restrict_left} ref={params.adapter_ref_5p_file} | "
             MAIN_IN="$PIPE_IN"
         fi
         if [[ "{params.trim_3p_linker}" == "True" ]]; then

@@ -176,6 +176,23 @@ params:
     adapter_ref_k: 18
     # >0: strip poly-A/T tails of at least this length after adapter trimming (0 = off)
     trim_polya: 0
+    # quality trim of the main trim_reads pass: bbduk qtrim=rl trimq (6 = bbduk default). Pick per batch with
+    # src/tools/qc_quality_scan.py (it prints the values to use)
+    trim_q: 6
+    # discard reads whose average quality after trimming is below this (bbduk maq); 0 = off
+    trim_maq: 0
+    # Per-batch trim switches (replace a hand-written trim.sh; the values shown = the previous hard-coded behaviour):
+    # false = skip the 3' MGI adapter k-mer pass (adapter_ref / adapter_ref_k)
+    trim_mgi_adapter: true
+    # false = no quality trimming at all (trim_q ignored)
+    trim_qtrim: false
+    # restrictleft of the 5' adapter183 pass (adapter_ref_5p): must cover where adapter183 sits.
+    # 30 = old value; 40 for split SE600 reads (adapter183 spans pos 6-30); 70 for RAW 625 bp reads
+    trim_5p_restrict_left: 30
+    # bbduk minlen: reads shorter than this after trimming are dropped (SE600 601/694 used 36)
+    trim_minlen: 10
+    # maxns of the main pass: drop reads with more N than this, -1 = off. Default: 0 for SE, off for PE
+    # trim_maxns: 0
     bgzip: "bgzip"
     # reference-free chimera detection for OLC post-assembly QC (no curated
     # reference DB in production -- see denovo_olc.smk's readbackQC_olc/
