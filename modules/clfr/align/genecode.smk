@@ -13,7 +13,7 @@
 # dependent); 'random' = seqtk read sampling, unbiased for the read-level %; 'umi' = sample whole UMIs (set explicitly), so
 # every sampled UMI keeps ALL its reads -- needed only for UMI-level %, since read sampling cuts reads/UMI.
 #   map_reads_minimap_genecode-> genecode/{id}.genecode.bam    (read-grouped, unsorted, unmapped kept)
-#   classify_reads_genecode   -> genecode/{id}.genecode_composition.tsv (+ _ambiguous.tsv)
+#   classify_reads_genecode   -> genecode/{id}.genecode_composition.tsv (+ _ambiguous.tsv, _clip.tsv)
 #   plot_composition_genecode -> genecode/{id}.genecode_composition.png (barplot, reads % and UMI %)
 # Reads and UMIs are both reported: rRNA is often deep per molecule, so the two can differ a lot.
 import os
@@ -141,7 +141,8 @@ rule classify_reads_genecode:
         bam = "genecode/{}.genecode.bam".format(GENECODE_ID)
     output:
         tsv = "genecode/{}.genecode_composition.tsv".format(GENECODE_ID),
-        amb = "genecode/{}.genecode_ambiguous.tsv".format(GENECODE_ID)
+        amb = "genecode/{}.genecode_ambiguous.tsv".format(GENECODE_ID),
+        clip = "genecode/{}.genecode_clip.tsv".format(GENECODE_ID)
     params:
         script = config['params']['src_dir'] + "modules/clfr/align/genecode_classify.py",
         gtf = config['params'].get('genecode_gtf', ''),
@@ -152,7 +153,7 @@ rule classify_reads_genecode:
         gtf_arg=""
         if [ -n "{params.gtf}" ]; then gtf_arg="--gtf {params.gtf}"; fi
         python3 {params.script} --bam {input.bam} --out {output.tsv} --out_ambiguous {output.amb} \
-            --min_cov {params.min_cov} $gtf_arg
+            --out_clip {output.clip} --min_cov {params.min_cov} $gtf_arg
         cat {output.tsv} >&2
         """
 

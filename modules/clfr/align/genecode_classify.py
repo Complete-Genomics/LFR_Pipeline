@@ -24,6 +24,9 @@ ORDER = ['protein_coding', 'globin', 'lncRNA', 'rRNA', 'Mt_rRNA', 'tRNA', 'other
          'pseudogene', 'IG_TR', 'TEC', 'other', 'genome_decoy', 'ambiguous', 'low_cov', 'unmapped']
 CIGAR_QUERY = {0, 1, 7, 8}      # M I = X consume query and count as aligned
 CIGAR_CLIP = {4, 5}             # S H
+# clip-length bins [lo, hi) for the --out_clip distribution; last bin is open-ended
+CLIP_BINS = [(0, 1, '0'), (1, 10, '1-9'), (10, 25, '10-24'), (25, 50, '25-49'), (50, 100, '50-99'),
+             (100, 200, '100-199'), (200, 400, '200-399'), (400, None, '400+')]
 
 
 def to_class(biotype, gene_name):
@@ -107,6 +110,34 @@ def aligned_and_total(rec):
     return aligned, aligned + clip
 
 
+def clip_of_best(recs):
+    """(clip5, clip3, read_len) of the best hit, in READ orientation (a reverse-strand alignment has its CIGAR
+    clips swapped), or None if the read has no alignment. Best = highest AS, ties -> most aligned bases."""
+    best = None
+    for r in recs:
+        if r.is_unmapped or r.is_supplementary or not r.cigartuples:
+            continue
+        a, total = aligned_and_total(r)
+        key = (r.get_tag('AS') if r.has_tag('AS') else a, a)
+        if best is None or key > best[0]:
+            best = (key, r, total)
+    if best is None:
+        return None
+    r, total = best[1], best[2]
+    cig = r.cigartuples
+    left = cig[0][1] if cig[0][0] in CIGAR_CLIP else 0
+    right = cig[-1][1] if cig[-1][0] in CIGAR_CLIP else 0
+    if r.is_reverse:
+        left, right = right, left
+    return left, right, total
+
+
+def clip_bin(n):
+    for lo, hi, label in CLIP_BINS:
+        if n >= lo and (hi is None or n < hi):
+            return label
+
+
 def classify_read(recs, gtf, cache, min_cov, tie_frac):
     """recs: all records of one read. Returns (class, ambiguous_combo or None)."""
     hits = [r for r in recs if not r.is_unmapped and not r.is_supplementary]
@@ -141,6 +172,8 @@ def main():
     ap.add_argument('--bam', required=True)
     ap.add_argument('--out', required=True, help='composition TSV')
     ap.add_argument('--out_ambiguous', required=True, help='ambiguous class-combination TSV')
+    ap.add_argument('--out_clip', default='',
+                    help='optional TSV: soft-clip length distribution of each mapped read\'s best hit, per class and read end')
     ap.add_argument('--gtf', default='', help='GENCODE annotation GTF(.gz) for gene_type; optional')
     ap.add_argument('--min_cov', type=float, default=0.5,
                     help='best hit must cover >= this fraction of the read (default 0.5)')
@@ -154,12 +187,21 @@ def main():
     umis = defaultdict(set)
     all_umis = set()
     ambiguous = Counter()
+    clip_hist = Counter()           # (class, end, bin) -> reads
+    clip_n = Counter()              # class -> mapped reads with a best hit
 
     def flush(recs):
         if not recs:
             return
         cls, combo = classify_read(recs, gtf, cache, a.min_cov, a.tie_frac)
         reads[cls] += 1
+        if a.out_clip:
+            c = clip_of_best(recs)
+            if c is not None:
+                for k in ('all', cls):
+                    clip_n[k] += 1
+                    clip_hist[(k, '5p', clip_bin(c[0]))] += 1
+                    clip_hist[(k, '3p', clip_bin(c[1]))] += 1
         if combo:
             ambiguous[combo] += 1
         u = umi_of(recs[0].query_name)
@@ -188,6 +230,15 @@ def main():
             o.write('{}\t{}\t{:.3f}\t{}\t{:.3f}\n'.format(
                 c, reads[c], 100.0 * reads[c] / total, nu, 100.0 * nu / n_umi if n_umi else 0.0))
         o.write('total\t{}\t100.000\t{}\t100.000\n'.format(total, n_umi))
+    if a.out_clip:
+        with open(a.out_clip, 'w') as o:
+            o.write('class\tend\tclip_bp\tn_reads\tpct_reads\n')
+            for k in ['all'] + [c for c in classes if clip_n[c]]:
+                for end in ('5p', '3p'):
+                    for _, _, label in CLIP_BINS:
+                        n = clip_hist[(k, end, label)]
+                        o.write('{}\t{}\t{}\t{}\t{:.3f}\n'.format(
+                            k, end, label, n, 100.0 * n / clip_n[k] if clip_n[k] else 0.0))
     with open(a.out_ambiguous, 'w') as o:
         o.write('classes\tn_reads\tpct_reads\n')
         for combo, n in ambiguous.most_common():
