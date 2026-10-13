@@ -121,7 +121,8 @@ params:
     general_python: "python"
     tabix: "/opt/cgi-tools/bin/tabix"
     hapcut2: "hapcut2/bin"
-    samtools: "hapcut2/bin/samtools"
+    # default 1.18, /home/ycai/anaconda3/envs/samtools1.13/bin/samtools
+    samtools: "samtools"
     bcftools: "/opt/cgi-tools/bin/bcftools"
     hapcut_link_dist: 100000
     wenlan_python: "/opt/cgi-anaconda2-4.4.0/bin/python"
@@ -161,9 +162,12 @@ params:
     genecode_umi_n: 50000              # umi mode: UMIs to sample
     genecode_subsample_reads: 400000   # head/random mode: reads to keep
     genecode_subsample_seed: 100
+    # minimap2 -N: max secondary alignments kept per read. Needed to see reads that hit several classes (ambiguous):
+    # on the test data ambiguous was 2.84% at 5, 3.79% at 10, 4.79% at 20, 4.99% at 50 (20 ~ plateau, 30% fewer records)
+    genecode_max_hits: 20
     genecode_min_cov: 0.5   # best hit must cover >= this fraction of the read, else low_cov (0.8 was too strict for SE600 3' quality decay)
     # samtools sort memory limit per sorting/compression thread.
-    minimap_sort_mem: "2G"
+    minimap_sort_mem: "8G"
 
     # denovo assembly tools (required when modules.frag_de_novo: True)
     megahit: "megahit"
@@ -297,9 +301,9 @@ threads:
     bwa: 100
     # 32-CPU mapping budget: minimap_map + minimap_sort must not exceed
     # minimap_total. Keep the remaining host CPUs available to the OS/I/O.
-    minimap_total: 32
-    minimap_map: 24
-    minimap_sort: 8
+    minimap_total: 38
+    minimap_map: 30
+    minimap_sort: 6
     consensus_index: 8
     consensus_name_sort: 2
     consensus_minimap: 20

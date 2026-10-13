@@ -6,6 +6,8 @@ python $src --module get_rc_seq --fasta $fa
 '''
 import subprocess
 import pickle
+import shutil
+import tempfile
 from Bio import SeqIO
 from collections import defaultdict
 import itertools
@@ -98,7 +100,7 @@ def get_rc_seq(seq):
     rc_seq = complement_sequence[::-1]
     return rc_seq
 
-def correct_direction_mapping(denovo_fasta, output, infile_paf):
+def correct_direction_mapping(denovo_fasta, output, infile_paf, notmapped=None):
     '''
     get frag direction from mapped.fasta (using r1 direction) to correct denovo.fasta direction (megahit output RC when palindrome found in assembly)
     '''
@@ -142,9 +144,11 @@ def correct_direction_mapping(denovo_fasta, output, infile_paf):
     #     pass
 
     # {bc: strand}
-    denovo_bc_strand_dict = defaultdict(int)
+    # a plain dict on purpose: a fragment that is not in the PAF must raise KeyError below and take the not-mapped
+    # branch (a defaultdict(int) returned 0, i.e. "not '+'", and silently reverse-complemented it)
+    denovo_bc_strand_dict = {}
     with open(infile_paf, 'r') as f:
-        [next(f) for x in range(7)]
+        # minimap2 writes no header: every line is an alignment (this used to skip the first 7 alignments)
         for line in f:
             try:
                 info = line.strip().split('\t')
@@ -198,7 +202,9 @@ def correct_direction_mapping(denovo_fasta, output, infile_paf):
     #                 f.write(seq+'\n')
 
     cnt_rc, frag_not_in_mapped =0, 0
-    with open(output,'w') as f, open(f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa', 'w') as f2:
+    if notmapped is None:
+        notmapped = f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa'
+    with open(output,'w') as f, open(notmapped, 'w') as f2:
         for bc in bc_fasta_dict:   
             try:
                 # same direction, denovo - is - seq, consensus - reverse
@@ -815,18 +821,31 @@ if __name__ == "__main__":
         _dir = OUTDIR # Align
         infile_paf=f'{OUTDIR}/{NAME}/{NAME}.paf'
         denovo_fasta= f'{OUTDIR}/{NAME}/{NAME}.fasta'
-        out_tmp = f'{OUTDIR}/{NAME}/{NAME}.fixRCmapping.fasta'
-        output0 = f'{OUTDIR}/{NAME}/{NAME}.fixAdapter.fasta'
-
-        correct_direction_mapping(denovo_fasta, out_tmp, infile_paf)
-        correct_direction_adapter(out_tmp, output0)
-        input_notmapped =f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa'
-        output_notmapped = f'{OUTDIR}/{NAME}/frag_not_in_mapped.fixAdapter.fa'
-        correct_direction_adapter(input_notmapped, output_notmapped)
-
         output = f'{OUTDIR}/{NAME}/{NAME}.fixRC.fasta'
-        cmd = f'cp {output0} {output} && cat {output_notmapped} >> {output}'
-        subprocess.call(cmd, shell=True)
+        # outputs: <NAME>.fixRC.fasta (mapped fragments) and frag_not_in_mapped.fa (fragments not in the PAF).
+        # The intermediates (<NAME>.fixRCmapping.fasta, <NAME>.fixAdapter.fasta, frag_not_in_mapped.fixAdapter.fa) are
+        # not outputs: they live in a temp dir that is removed; the counts of flipped / not-mapped fragments are
+        # printed by correct_direction_mapping
+        with tempfile.TemporaryDirectory(prefix='fixrc_') as tmp:
+            out_tmp = f'{tmp}/fixRCmapping.fasta'
+            output0 = f'{tmp}/fixAdapter.fasta'
+            input_notmapped = f'{OUTDIR}/{NAME}/frag_not_in_mapped.fa'      # a real output: the fragments not in the PAF
+            output_notmapped = f'{tmp}/frag_not_in_mapped.fixAdapter.fa'
+
+            correct_direction_mapping(denovo_fasta, out_tmp, infile_paf, notmapped=input_notmapped)
+            correct_direction_adapter(out_tmp, output0)
+            correct_direction_adapter(input_notmapped, output_notmapped)
+
+            # consensus.fixRC.fasta holds only the fragments that mapped; the not-mapped ones are dropped (their count is
+            # printed). denovo keeps appending them, as before.
+            include_not_mapped = (NAME != 'consensus')
+            with open(output, 'w') as fout:
+                for part in ((output0, output_notmapped) if include_not_mapped else (output0,)):
+                    with open(part) as fin:
+                        shutil.copyfileobj(fin, fout)
+            if not include_not_mapped:
+                n_nm = sum(1 for l in open(input_notmapped) if l.startswith('>'))
+                print(f'{NAME}: {n_nm} fragment(s) not in the PAF are not in {output}; they are in {input_notmapped}')
 
     elif module=='frag_10x_coverage':
         frag_10x_coverage(fasta)
