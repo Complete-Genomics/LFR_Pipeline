@@ -117,7 +117,7 @@ rule map_reads_minimap_genecode:
         GENECODE_THREADS
     params:
         MINIMAP = config['params']['minimap2'],
-        max_hits = config['params'].get('genecode_max_hits', 50)
+        max_hits = config['params'].get('genecode_max_hits', 20)
     log:
         "genecode/minimap_genecode.log"
     benchmark:
