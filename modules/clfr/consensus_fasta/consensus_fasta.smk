@@ -86,6 +86,8 @@ rule get_consensus_fasta:
         fasta = "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.fasta",
         stats = "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.assembly_counts.tsv"
     threads: 1
+    resources:
+        mem_mb = 4000
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'], 

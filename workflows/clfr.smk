@@ -50,7 +50,9 @@ else:
 
 # define a function to return target files based on config settings
 def run_all_input(wildcards):
-    run_all_files = ["data/split_read.2.fq.gz"]
+    run_all_files = []
+    if config['modules']['BCsplit']==True:
+        run_all_files.extend(["data/split_read.2.fq.gz"])
 
     # GENCODE composition: additive target; set modules.mapping etc. to False for a composition-only run
     if GENECODE:
