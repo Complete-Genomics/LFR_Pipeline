@@ -169,7 +169,7 @@ def cliff(mean_curve):
 
 def run_bbduk(bbduk, sample, out, q, maq):
     cmd = '{} in={} out={} qtrim=rl trimq={}{}'.format(bbduk, sample, out, q, ' maq=%d' % maq if maq > 0 else '')
-    r = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    r = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
     if r.returncode != 0 or not os.path.exists(out):
         raise RuntimeError('bbduk failed: {}\n{}'.format(cmd, r.stderr[-400:]))
 
@@ -186,7 +186,7 @@ def head_reads(src, dst, n):
 
 def run_snakemake(a, workdir, target, extra=()):
     cmd = [a.snakemake, '-s', a.smk, target, '-d', str(workdir), '--cores', str(a.cores), '--quiet', 'rules'] + list(extra)
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
     if r.returncode != 0 or not (Path(workdir) / target).exists():
         raise RuntimeError('snakemake failed ({}):\n{}'.format(' '.join(cmd), r.stdout[-1500:]))
 
