@@ -185,7 +185,7 @@ def head_reads(src, dst, n):
 
 
 def run_snakemake(a, workdir, target, extra=()):
-    cmd = [a.snakemake, '-s', a.smk, target, '-d', str(workdir), '--cores', str(a.cores), '--quiet', 'rules'] + list(extra)
+    cmd = [a.snakemake, '-s', a.smk, target, '-d', str(workdir), '--cores', str(a.cores), '--quiet'] + list(extra)
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
     if r.returncode != 0 or not (Path(workdir) / target).exists():
         raise RuntimeError('snakemake failed ({}):\n{}'.format(' '.join(cmd), r.stdout[-1500:]))
