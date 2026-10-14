@@ -558,7 +558,8 @@ def main():
         ax[2].set_ylabel('bases with Q<10 (%)')
         ax[2].set_title('trim trade-off (labels = trimq:maq)')
         for s in ax:
-            s.spines[['top', 'right']].set_visible(False)
+            for side in ('top', 'right'):
+                s.spines[side].set_visible(False)
         fig.suptitle('{}  (n={})'.format(before['file'], n), x=0.01, ha='left')
         fig.tight_layout()
         fig.savefig(os.path.join(a.outdir, 'quality_scan.png'), dpi=130)
@@ -584,7 +585,8 @@ def main():
         bx[1].set_title('cumulative distribution')
         bx[0].legend(frameon=False, fontsize=8)
         for s_ in bx:
-            s_.spines[['top', 'right']].set_visible(False)
+            for side in ('top', 'right'):
+                s_.spines[side].set_visible(False)
         fig2.suptitle('{}  (n={})'.format(before['file'], n), x=0.01, ha='left')
         fig2.tight_layout()
         fig2.savefig(os.path.join(a.outdir, 'low_quality_distribution.png'), dpi=130)

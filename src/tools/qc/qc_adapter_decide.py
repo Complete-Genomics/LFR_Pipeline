@@ -141,7 +141,8 @@ def cmd_setcfg(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest='cmd', required=True)
+    sub = ap.add_subparsers(dest='cmd')
+    sub.required = True     # add_subparsers(required=) needs Python 3.7
     for name, fn, mp in (('split', cmd_split, 3.0), ('mgi', cmd_mgi, 3.0), ('polya', cmd_polya, 1.0)):
         p = sub.add_parser(name)
         p.add_argument('--reads', required=True)
