@@ -600,7 +600,19 @@ def coverage_bias(infile, name):
 #     return
 
 ### all.fq    
-def metrics_basic(fasta, outdir, cutoff, name):
+def read_assembly_counts(counts_file):
+    """'all' row of consensus_assembly_counts.tsv -> (assembled reads, assembled UMI groups) or None."""
+    try:
+        with open(counts_file) as f:
+            next(f)
+            for line in f:
+                info = line.rstrip('\n').split('\t')
+                if info[0] == 'all':
+                    return int(info[2]), int(info[3])
+    except Exception as e: print(e)
+    return None
+
+def metrics_basic(fasta, outdir, cutoff, name, counts_file=None):
     
     s = rna_16s(fasta)
     s.assembly_len_distribution(CBC_LEN)   
@@ -621,11 +633,15 @@ def metrics_basic(fasta, outdir, cutoff, name):
     plt.title(f"{name}_frag_length_distribution_count{cutoff}")
     plt.xlabel("Fragment length")
     plt.ylabel("Count")
+    legend_text = (f"count={len(assembly_len)}\nmean={mean(assembly_len):.2f}\n"
+                   f"median={median(assembly_len)}\nmin={min(assembly_len)}\n"
+                   f"max={max(assembly_len)}")
+    counts = read_assembly_counts(counts_file) if counts_file else None
+    if counts:
+        legend_text += f"\nassembled reads={counts[0]}\nassembled UMI groups={counts[1]}"
     plt.gca().text(
         0.98, 0.98,
-        f"count={len(assembly_len)}\nmean={mean(assembly_len):.4f}\n"
-        f"median={median(assembly_len)}\nmin={min(assembly_len)}\n"
-        f"max={max(assembly_len)}",
+        legend_text,
         transform=plt.gca().transAxes,
         ha="right",
         va="top",
@@ -670,6 +686,7 @@ if __name__ == "__main__":
     parser.add_argument("--outdir", type=str, required=False)
     parser.add_argument("--minreads_fasta", type=int, required=False)
     parser.add_argument("--name", type=str, required=False)
+    parser.add_argument("--counts_file", type=str, required=False)
 
     args = parser.parse_args() 
     module = args.module
@@ -712,7 +729,7 @@ if __name__ == "__main__":
         # fasta = 'all.contigs_max.fasta'
         if fasta:
             cutoff = args.minreads_fasta
-            metrics_basic(fasta, outdir, cutoff, name)
+            metrics_basic(fasta, outdir, cutoff, name, args.counts_file)
         else:
             print('needs fasta')
     

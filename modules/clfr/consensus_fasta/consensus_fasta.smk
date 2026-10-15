@@ -187,7 +187,6 @@ rule fasta_frag_len_distribution_consensus:
                     chrom, split_idx, reads, umi_groups = line.split("\t")
                     assembled_reads += int(reads)
                     assembled_umi_groups += int(umi_groups)
-                    merged_stats.write(line + "\n")
             merged_stats.write(
                 f"all\tall\t{assembled_reads}\t{assembled_umi_groups}\n"
             )
@@ -199,6 +198,7 @@ rule fasta_frag_len_distribution_consensus:
                     "--outdir consensus/",
                     "--name consensus",
                     "--minreads_fasta {params.minreads_fasta}",
+                    "--counts_file {output.stats}",
                     "--module metrics_basic"] 
         shell(" ".join(command))
 
