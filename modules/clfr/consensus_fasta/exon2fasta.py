@@ -616,9 +616,8 @@ def metrics_basic(fasta, outdir, cutoff, name):
             f.write(f'min={min(assembly_len)}, max={max(assembly_len)}\n')
     except Exception as e: print(e)
     
-    sns.set(rc={'figure.figsize': (15, 8)})
-    sns.set_style("whitegrid")
-    sns.distplot(assembly_len_filtered, bins=50, kde=True)
+    sns.set_theme(style="whitegrid", rc={'figure.figsize': (15, 8)})
+    sns.histplot(assembly_len_filtered, bins=50, kde=True, stat='density')
     plt.title(f"{name}_frag_length_distribution_count{cutoff}")
     plt.xlabel("Fragment length")
     plt.ylabel("Count")
