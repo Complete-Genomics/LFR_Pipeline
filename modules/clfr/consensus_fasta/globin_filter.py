@@ -46,9 +46,10 @@ def gene_of_header(header):
     if m:
         return next(g for g in m.groups() if g)
     # RefSeq: "NM_000518.5 Homo sapiens hemoglobin subunit beta (HBB), mRNA"
-    m = re.search(r'\(([^()\s]+)\),', header)
-    if m:
-        return m.group(1)
+    # a description can hold several "(...)," groups, e.g. "kinase (cAMP-dependent), ... (PRKACA), ..."; the symbol is the last
+    groups = re.findall(r'\(([^()\s]+)\),', header)
+    if groups:
+        return groups[-1]
     return None
 
 
