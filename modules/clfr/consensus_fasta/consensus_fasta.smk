@@ -7,10 +7,85 @@ wildcard_constraints:
     split_idx = r"\d+",
     i = r"\d+"
 
+# ---- drop globin + globin pseudogene reads from the bam consensus starts from ----
+# Mapping stays on the standard reference. This only saves consensus time (reformat / sort / per-UMI assembly);
+# the unfiltered Align/{id}.sort.removedup_rm000.bam is untouched and still used by everything else.
+#   params.consensus_exclude_globin: true|false   default true when library_species is human
+#   params.consensus_exclude_bed: optional BED (reference contig names); replaces the generated one
+# Generated BED = MANE Select transcript span of each gene in globin_genes (gene span for the globin pseudogenes),
+# from params.genecode_gtf (else params.mandalorion_gtf). MANE spans, not gene spans: GENCODE gives HBE1/HBG2 ~240 kb
+# read-through transcripts that would remove the neighbouring olfactory receptor genes.
+# get_chr_dict (samtools_idx.txt: per-chr read counts that set the 5 split windows) reads the SAME filtered bam,
+# so the counts match what get_consensus_fasta sees.
+GLOBIN_GENES = config['params'].get('globin_genes', "HBA1 HBA2 HBB HBD HBE1 HBG1 HBG2 HBM HBQ1 HBZ")
+GLOBIN_PSEUDOGENES = config['params'].get('globin_pseudogenes', "HBBP1 HBZP1 HBAP1")
+CONSENSUS_EXCLUDE_BED_USER = config['params'].get('consensus_exclude_bed') or ''
+CONSENSUS_EXCLUDE_GLOBIN = bool(CONSENSUS_EXCLUDE_BED_USER) or bool(config['params'].get(
+    'consensus_exclude_globin', config['params'].get('library_species', 'human') == 'human'))
+CONSENSUS_EXCLUDE_BED = CONSENSUS_EXCLUDE_BED_USER or "Align/globin_regions.bed"
+CONSENSUS_BAM_PAT = "Align/{id}.sort.removedup_rm000" + (".noglobin" if CONSENSUS_EXCLUDE_GLOBIN else "") + ".bam"
+CONSENSUS_BAM = CONSENSUS_BAM_PAT.replace("{id}", config['samples']['id'])
+
+if CONSENSUS_EXCLUDE_GLOBIN:
+    if not CONSENSUS_EXCLUDE_BED_USER:
+        rule make_globin_bed:
+            input:
+                gtf = config['params'].get('genecode_gtf') or config['params'].get('mandalorion_gtf')
+            output:
+                bed = CONSENSUS_EXCLUDE_BED
+            params:
+                genes = GLOBIN_GENES,
+                pseudo = GLOBIN_PSEUDOGENES
+            shell:
+                """
+                set -euo pipefail
+                mkdir -p Align
+                gzip -dc -f {input.gtf} | awk -F'\t' -v OFS='\t' -v genes="{params.genes}" -v pseudo="{params.pseudo}" '
+                    BEGIN{{n=split(genes,a," "); for(i=1;i<=n;i++) g[a[i]]=1; n=split(pseudo,b," "); for(i=1;i<=n;i++) p[b[i]]=1}}
+                    match($9,/gene_name "[^"]+"/) {{
+                        nm=substr($9,RSTART+11,RLENGTH-12)
+                        if ($3=="transcript" && $9 ~ /tag "MANE_Select"/ && (nm in g)) print $1,$4-1,$5,nm
+                        else if ($3=="gene" && $9 ~ /pseudogene/ && (nm in p)) print $1,$4-1,$5,nm}}' \
+                    | sort -k1,1 -k2,2n -u > {output.bed}
+                found=$(cut -f4 {output.bed} | sort -u | wc -l)
+                want=$(echo {params.genes} {params.pseudo} | wc -w)
+                if [ "$found" -ne "$want" ]; then
+                    echo "make_globin_bed: found $found of $want globin genes/pseudogenes in {input.gtf} (need MANE_Select tags)" >&2
+                    exit 1
+                fi
+                """
+
+    rule filter_globin_bam:
+        input:
+            bam = "Align/{id}.sort.removedup_rm000.bam",
+            bai = "Align/{id}.sort.removedup_rm000.bam.bai",
+            bed = CONSENSUS_EXCLUDE_BED
+        output:
+            bam = "Align/{id}.sort.removedup_rm000.noglobin.bam",
+            bai = "Align/{id}.sort.removedup_rm000.noglobin.bam.bai",
+            stats = "Align/{id}.globin_filter_stats.txt"
+        threads:
+            config['threads'].get('consensus_name_sort', 2)
+        params:
+            samtools = config['params'].get('samtools', 'samtools')
+        benchmark:
+            "Benchmarks/consensus_fasta.filter_globin_bam.{id}.txt"
+        shell:
+            """
+            set -euo pipefail
+            # -L keeps reads overlapping the BED; -U receives everything else, which is the output we want (do not add -M: it
+            # switches -L to index-region iteration and -U would then miss the reads outside the BED)
+            {params.samtools} view -@ {threads} -b -L {input.bed} -U {output.bam} -o /dev/null {input.bam}
+            {params.samtools} index -@ {threads} {output.bam}
+            before=$({params.samtools} idxstats {input.bam} | awk '{{n+=$3}} END{{print n}}')
+            after=$({params.samtools} idxstats {output.bam} | awk '{{n+=$3}} END{{print n}}')
+            printf "mapped_before\\t%s\\nmapped_after\\t%s\\nremoved\\t%s\\n" $before $after $((before-after)) > {output.stats}
+            """
+
 rule get_chr_dict:
     input:
-        bam="Align/{}.sort.removedup_rm000.bam".format(config['samples']['id']),
-        bai="Align/{}.sort.removedup_rm000.bam.bai".format(config['samples']['id'])
+        bam=CONSENSUS_BAM,
+        bai=CONSENSUS_BAM + ".bai"
     output:
         "Align/samtools_idx.txt"
     params:
@@ -22,8 +97,8 @@ rule get_chr_dict:
 
 rule split_consensus_bam:
     input:
-        bam = "Align/{id}.sort.removedup_rm000.bam",
-        bai = "Align/{id}.sort.removedup_rm000.bam.bai"
+        bam = CONSENSUS_BAM_PAT,
+        bai = CONSENSUS_BAM_PAT + ".bai"
     output:
         bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
         bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
