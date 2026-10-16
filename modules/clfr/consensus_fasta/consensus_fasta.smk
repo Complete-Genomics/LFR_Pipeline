@@ -2,6 +2,8 @@
 part of clfr workflow, get (transcriptome) fasta
 '''
 
+from pathlib import Path
+
 NUM_SPLITS_CONSENSUS=5
 wildcard_constraints:
     split_idx = r"\d+",
@@ -11,50 +13,19 @@ wildcard_constraints:
 # Mapping stays on the standard reference. This only saves consensus time (reformat / sort / per-UMI assembly);
 # the unfiltered Align/{id}.sort.removedup_rm000.bam is untouched and still used by everything else.
 #   params.consensus_exclude_globin: true|false   default true when library_species is human
-#   params.consensus_exclude_bed: optional BED (reference contig names); replaces the generated one
-# Generated BED = MANE Select transcript span of each gene in globin_genes (gene span for the globin pseudogenes),
-# from params.genecode_gtf (else params.mandalorion_gtf). MANE spans, not gene spans: GENCODE gives HBE1/HBG2 ~240 kb
-# read-through transcripts that would remove the neighbouring olfactory receptor genes.
+#   params.consensus_exclude_bed: optional BED (reference contig names); replaces the packaged one
+# Default BED = globin_regions.bed next to this file (GRCh38, chr-prefixed; how it was built: globin_regions.README.md).
+# It is a checked-in file, not rebuilt per run. For a reference with other contig names, give your own BED.
 # get_chr_dict (samtools_idx.txt: per-chr read counts that set the 5 split windows) reads the SAME filtered bam,
 # so the counts match what get_consensus_fasta sees.
-GLOBIN_GENES = config['params'].get('globin_genes', "HBA1 HBA2 HBB HBD HBE1 HBG1 HBG2 HBM HBQ1 HBZ")
-GLOBIN_PSEUDOGENES = config['params'].get('globin_pseudogenes', "HBBP1 HBZP1 HBAP1")
 CONSENSUS_EXCLUDE_BED_USER = config['params'].get('consensus_exclude_bed') or ''
 CONSENSUS_EXCLUDE_GLOBIN = bool(CONSENSUS_EXCLUDE_BED_USER) or bool(config['params'].get(
     'consensus_exclude_globin', config['params'].get('library_species', 'human') == 'human'))
-CONSENSUS_EXCLUDE_BED = CONSENSUS_EXCLUDE_BED_USER or "Align/globin_regions.bed"
+CONSENSUS_EXCLUDE_BED = CONSENSUS_EXCLUDE_BED_USER or str(Path(config['params']['src_dir']) / "modules" / "clfr" / "consensus_fasta" / "globin_regions.bed")
 CONSENSUS_BAM_PAT = "Align/{id}.sort.removedup_rm000" + (".noglobin" if CONSENSUS_EXCLUDE_GLOBIN else "") + ".bam"
 CONSENSUS_BAM = CONSENSUS_BAM_PAT.replace("{id}", config['samples']['id'])
 
 if CONSENSUS_EXCLUDE_GLOBIN:
-    if not CONSENSUS_EXCLUDE_BED_USER:
-        rule make_globin_bed:
-            input:
-                gtf = config['params'].get('genecode_gtf') or config['params'].get('mandalorion_gtf')
-            output:
-                bed = CONSENSUS_EXCLUDE_BED
-            params:
-                genes = GLOBIN_GENES,
-                pseudo = GLOBIN_PSEUDOGENES
-            shell:
-                """
-                set -euo pipefail
-                mkdir -p Align
-                gzip -dc -f {input.gtf} | awk -F'\t' -v OFS='\t' -v genes="{params.genes}" -v pseudo="{params.pseudo}" '
-                    BEGIN{{n=split(genes,a," "); for(i=1;i<=n;i++) g[a[i]]=1; n=split(pseudo,b," "); for(i=1;i<=n;i++) p[b[i]]=1}}
-                    match($9,/gene_name "[^"]+"/) {{
-                        nm=substr($9,RSTART+11,RLENGTH-12)
-                        if ($3=="transcript" && $9 ~ /tag "MANE_Select"/ && (nm in g)) print $1,$4-1,$5,nm
-                        else if ($3=="gene" && $9 ~ /pseudogene/ && (nm in p)) print $1,$4-1,$5,nm}}' \
-                    | sort -k1,1 -k2,2n -u > {output.bed}
-                found=$(cut -f4 {output.bed} | sort -u | wc -l)
-                want=$(echo {params.genes} {params.pseudo} | wc -w)
-                if [ "$found" -ne "$want" ]; then
-                    echo "make_globin_bed: found $found of $want globin genes/pseudogenes in {input.gtf} (need MANE_Select tags)" >&2
-                    exit 1
-                fi
-                """
-
     rule filter_globin_bam:
         input:
             bam = "Align/{id}.sort.removedup_rm000.bam",
