@@ -127,6 +127,7 @@ UMI_SPAN_SANITY_EXCEEDED_COUNT = 0
 ASSEMBLED_READ_COUNT = 0
 MONO_EXON_TOTAL_COUNT = 0
 MONO_EXON_INTRONIC_DROPPED_COUNT = 0
+MONO_EXON_INTRONIC_DROPPED_ROWS = []
 
 # MIN_READS = 50
 # temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
@@ -293,7 +294,7 @@ def get_umi_from_read_id(read_id):
         return parts[-1]
     return None
 
-def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_dir):
+def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_dir, umi_id=''):
     """Generate BED data in memory from BAM objects using stringtie."""
     
     # Create temp BAM for StringTie
@@ -335,6 +336,7 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
         # Group exons by transcript and calculate transcript regions
         from collections import defaultdict
         transcript_exons = defaultdict(list)
+        transcript_cov = {}
         
         for line in gtf_lines:
             if "exon" not in line:
@@ -353,6 +355,8 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
                 if 'transcript_id "' in attributes:
                     transcript_id = attributes.split('transcript_id "')[1].split('"')[0]
                     transcript_exons[transcript_id].append((chrom, start, end))
+                    if 'cov "' in attributes:
+                        transcript_cov[transcript_id] = attributes.split('cov "')[1].split('"')[0]
             except (ValueError, IndexError) as e:
                 sys.stderr.write(f"Error parsing GTF line: {line}, Error: {e}\n")
                 continue
@@ -385,8 +389,12 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
                     MONO_EXON_TOTAL_COUNT += 1
                     _, ex_start, ex_end = info['exons'][0]
                     # StringTie GTF is 1-based inclusive, the same convention process_umi_group_single_thread uses below
-                    if INTRON_ANNOTATION.intronic_fraction(ex_start - 1, ex_end) >= INTRONIC_FRAC:
+                    intronic_frac = INTRON_ANNOTATION.intronic_fraction(ex_start - 1, ex_end)
+                    if intronic_frac >= INTRONIC_FRAC:
                         MONO_EXON_INTRONIC_DROPPED_COUNT += 1
+                        MONO_EXON_INTRONIC_DROPPED_ROWS.append((
+                            umi_id, info['chrom'], ex_start, ex_end, ex_end - ex_start + 1,
+                            f"{intronic_frac:.3f}", transcript_cov.get(transcript_id, "")))
                         continue
                 kept[transcript_id] = info
             transcript_info = kept
@@ -510,7 +518,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         indices = sorted(rng.sample(range(len(reads_list_obj)), target_count))
         reads_list_obj = [reads_list_obj[i] for i in indices]
 
-    bed_lines = generate_bed_data(reads_list_obj, header_dict_data, STRINGTIE_PATH, current_temp_dir)
+    bed_lines = generate_bed_data(reads_list_obj, header_dict_data, STRINGTIE_PATH, current_temp_dir, umi_id)
     # print(f'{umi_id}')
     # print(bed_lines)
     if not bed_lines:
@@ -711,6 +719,12 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
             f"Mono-exon transcripts: {MONO_EXON_TOTAL_COUNT}, dropped as intronic "
             f"(>= {INTRONIC_FRAC:.2f}): {MONO_EXON_INTRONIC_DROPPED_COUNT}\n"
         )
+        # what was dropped, so the filter can be audited / the threshold tuned without rerunning consensus
+        dropped_path = output_fasta_file + ".intronic_dropped.tsv"
+        with open(dropped_path, "wt") as dropped_handle:
+            dropped_handle.write("umi_id\tchrom\tstart\tend\tlength\tintronic_frac\tstringtie_cov\n")
+            for row in MONO_EXON_INTRONIC_DROPPED_ROWS:
+                dropped_handle.write("\t".join(map(str, row)) + "\n")
     if UMI_SPAN_SANITY_EXCEEDED_COUNT:
         sys.stderr.write(
             f"Skipped {UMI_SPAN_SANITY_EXCEEDED_COUNT} UMI groups exceeding the span sanity limit.\n"
