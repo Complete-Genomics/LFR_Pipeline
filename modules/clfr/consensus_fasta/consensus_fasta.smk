@@ -141,7 +141,10 @@ rule get_consensus_fasta:
         samtools = config['params'].get('samtools', 'samtools'),
         min_reads = config['params']['reads_per_BC'],
         downsample_ratio = config['params'].get('downsample_ratio', 1.0),
-        use_samtools_reference = config['params'].get('use_samtools_reference', False)
+        use_samtools_reference = config['params'].get('use_samtools_reference', False),
+        drop_intronic_mono_exon = config['params'].get('consensus_drop_intronic_mono_exon', False),
+        consensus_gtf = config['params'].get('consensus_gtf', ''),
+        intronic_frac = config['params'].get('consensus_intronic_frac', 0.5)
     benchmark:
         "Benchmarks/consensus_fasta.get_consensus_fasta.{id}.{chr}.{split_idx}.txt"
     run:
@@ -160,6 +163,10 @@ rule get_consensus_fasta:
                     ] 
         if params.use_samtools_reference:
             command.append("--use_samtools_reference")
+        if params.drop_intronic_mono_exon:
+            command.append("--drop_intronic_mono_exon --intronic_frac {params.intronic_frac}")
+            if params.consensus_gtf:
+                command.append("--gtf {params.consensus_gtf}")
         shell(" ".join(command))
 
 

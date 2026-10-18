@@ -6,6 +6,7 @@ python $src --bam $bam --ref_fasta $ref --output_fasta output.fa --start_index 2
 import random
 import subprocess
 import os
+import bisect
 import tempfile
 import pysam
 import sys
@@ -47,6 +48,12 @@ parser.add_argument("--samtools", type=str, default=None, required=False)
 parser.add_argument("--temp_dir", type=str, default="/dev/shm", required=False)
 parser.add_argument("--stats_file", type=str, default=None, required=False)
 parser.add_argument("--use_samtools_reference", action="store_true")
+parser.add_argument("--drop_intronic_mono_exon", action="store_true",
+                    help="drop StringTie mono-exon transcripts that lie mostly inside annotated introns")
+parser.add_argument("--gtf", type=str, default=None, required=False,
+                    help="annotation GTF for --drop_intronic_mono_exon (default: gencode.v49 under Data_and_Tools)")
+parser.add_argument("--intronic_frac", type=float, default=0.5, required=False,
+                    help="a mono-exon transcript is dropped when >= this fraction of its bases is intronic")
 
 args = parser.parse_args()
 input_bam_file = args.bam
@@ -63,6 +70,8 @@ SAMTOOLS_ARG = args.samtools
 TEMP_DIR_PARENT = args.temp_dir
 STATS_FILE = args.stats_file
 USE_SAMTOOLS_REFERENCE = args.use_samtools_reference
+DROP_INTRONIC_MONO_EXON = args.drop_intronic_mono_exon
+INTRONIC_FRAC = args.intronic_frac
 
 if DOWNSAMPLE_RATIO <= 0 or DOWNSAMPLE_RATIO > 1:
     raise ValueError("--downsample_ratio must be > 0 and <= 1")
@@ -104,7 +113,7 @@ MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
 REF = reference_fasta_file
 DATA_TOOLS_ROOT = get_data_tools_root(REF)
-GTF = os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
+GTF = args.gtf or os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
 
 SAMTOOLS_PATH = SAMTOOLS_ARG or env_tool("samtools")
 STRINGTIE_PATH = env_tool("stringtie")
@@ -116,6 +125,8 @@ log_samtools_runtime(SAMTOOLS_PATH, SAMTOOLS_CONSENSUS_HAS_REF, SAMTOOLS_CONSENS
 EMPTY_CONSENSUS_COUNT = 0
 UMI_SPAN_SANITY_EXCEEDED_COUNT = 0
 ASSEMBLED_READ_COUNT = 0
+MONO_EXON_TOTAL_COUNT = 0
+MONO_EXON_INTRONIC_DROPPED_COUNT = 0
 
 # MIN_READS = 50
 # temp_dir is a parent directory: /dev/shm -> /dev/shm/consensus_tmp_<pid>,
@@ -123,6 +134,64 @@ ASSEMBLED_READ_COUNT = 0
 TEMP_DIR_NAME = f"consensus_tmp_{os.getpid()}"
 TEMP_BASE_DIR = os.path.join((TEMP_DIR_PARENT or "/dev/shm").rstrip(os.sep), TEMP_DIR_NAME)
 FALLBACK_TEMP_DIR = "/tmp"
+
+def _merge_intervals(intervals):
+    merged = []
+    for s, e in sorted(intervals):
+        if merged and s <= merged[-1][1]:
+            if e > merged[-1][1]:
+                merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    return merged
+
+def _overlap_bases(merged, starts, s, e):
+    """Bases of [s, e) covered by sorted non-overlapping intervals `merged` (starts = their start list)."""
+    i = max(bisect.bisect_right(starts, s) - 1, 0)
+    total = 0
+    while i < len(merged) and merged[i][0] < e:
+        total += max(0, min(e, merged[i][1]) - max(s, merged[i][0]))
+        i += 1
+    return total
+
+class IntronAnnotation:
+    """Exon union and gene-body union of one chromosome, from a GTF. Intronic bases = gene body minus exon."""
+    def __init__(self, gtf_path, chrom):
+        want = chrom if chrom.startswith("chr") else "chr" + chrom
+        exons, genes = [], []
+        with open(gtf_path) as fh:
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                f = line.split("\t", 5)
+                if len(f) < 5 or f[0] != want or f[2] not in ("exon", "gene"):
+                    continue
+                (exons if f[2] == "exon" else genes).append((int(f[3]) - 1, int(f[4])))
+        if not exons:
+            raise RuntimeError(f"No exon records for {want} in {gtf_path}; check the GTF and its contig naming.")
+        self.exons = _merge_intervals(exons)
+        self.exon_starts = [x[0] for x in self.exons]
+        self.genes = _merge_intervals(genes)
+        self.gene_starts = [x[0] for x in self.genes]
+
+    def intronic_fraction(self, s, e):
+        """Fraction of the 0-based half-open [s, e) inside a gene body but outside every annotated exon."""
+        if e <= s:
+            return 0.0
+        genic = _overlap_bases(self.genes, self.gene_starts, s, e)
+        exonic = _overlap_bases(self.exons, self.exon_starts, s, e)
+        return max(0, genic - exonic) / (e - s)
+
+INTRON_ANNOTATION = None
+if DROP_INTRONIC_MONO_EXON:
+    if not os.path.exists(GTF):
+        sys.stderr.write(f"ERROR: --drop_intronic_mono_exon needs an annotation GTF, not found: {GTF}\n")
+        sys.exit(1)
+    INTRON_ANNOTATION = IntronAnnotation(GTF, chrom)
+    sys.stderr.write(
+        f"Dropping mono-exon transcripts with >= {INTRONIC_FRAC:.2f} intronic bases ({GTF}, {chrom}: "
+        f"{len(INTRON_ANNOTATION.exons)} merged exons, {len(INTRON_ANNOTATION.genes)} merged gene bodies)\n"
+    )
 
 def make_temp_dir(chrom, split_index, batch_id):
     fallback_root = os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME, "consensus")
@@ -305,6 +374,23 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
                 'exons': exons
             }
         
+        # StringTie calls any contiguous covered block an "exon". With no junction evidence (nascent / unspliced RNA,
+        # intron retention) it emits a mono-exon transcript that sits in an annotated intron. Drop those before the
+        # "longest transcript" pick, otherwise the longer intronic block wins over the real spliced transcript.
+        if INTRON_ANNOTATION is not None:
+            global MONO_EXON_TOTAL_COUNT, MONO_EXON_INTRONIC_DROPPED_COUNT
+            kept = {}
+            for transcript_id, info in transcript_info.items():
+                if len(info['exons']) == 1:
+                    MONO_EXON_TOTAL_COUNT += 1
+                    _, ex_start, ex_end = info['exons'][0]
+                    # StringTie GTF is 1-based inclusive, the same convention process_umi_group_single_thread uses below
+                    if INTRON_ANNOTATION.intronic_fraction(ex_start - 1, ex_end) >= INTRONIC_FRAC:
+                        MONO_EXON_INTRONIC_DROPPED_COUNT += 1
+                        continue
+                kept[transcript_id] = info
+            transcript_info = kept
+
         # Function to check if two transcripts overlap
         def transcripts_overlap(t1, t2):
             if t1['chrom'] != t2['chrom']:
@@ -619,6 +705,11 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
     if EMPTY_CONSENSUS_COUNT:
         sys.stderr.write(
             f"Skipped {EMPTY_CONSENSUS_COUNT} regions with empty or invalid samtools consensus output.\n"
+        )
+    if INTRON_ANNOTATION is not None:
+        sys.stderr.write(
+            f"Mono-exon transcripts: {MONO_EXON_TOTAL_COUNT}, dropped as intronic "
+            f"(>= {INTRONIC_FRAC:.2f}): {MONO_EXON_INTRONIC_DROPPED_COUNT}\n"
         )
     if UMI_SPAN_SANITY_EXCEEDED_COUNT:
         sys.stderr.write(
