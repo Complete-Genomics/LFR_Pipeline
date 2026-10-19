@@ -22,4 +22,4 @@ Rebuild (e.g. for a new GENCODE release):
       | sort -k1,1 -k2,2n -u > globin_regions.bed
 
 Lives next to `consensus_fasta.smk`, which reads it from `<src_dir>/modules/clfr/consensus_fasta/`. Expect 13 lines. For a reference with other contig names (e.g. `11` instead of `chr11`) or another species, set
-`params.consensus_exclude_bed` to your own BED.
+`params.consensus_exclude_bed` to your own BED. The globin filter itself is off by default; turn it on with `params.consensus_exclude_globin: True`.

@@ -12,15 +12,14 @@ wildcard_constraints:
 # ---- drop globin + globin pseudogene reads from the bam consensus starts from ----
 # Mapping stays on the standard reference. This only saves consensus time (reformat / sort / per-UMI assembly);
 # the unfiltered Align/{id}.sort.removedup_rm000.bam is untouched and still used by everything else.
-#   params.consensus_exclude_globin: true|false   default true when library_species is human
-#   params.consensus_exclude_bed: optional BED (reference contig names); replaces the packaged one
+#   params.consensus_exclude_globin: true|false   default false (off)
+#   params.consensus_exclude_bed: optional BED (reference contig names); replaces the packaged one; only used when consensus_exclude_globin is true
 # Default BED = globin_regions.bed next to this file (GRCh38, chr-prefixed; how it was built: globin_regions.README.md).
 # It is a checked-in file, not rebuilt per run. For a reference with other contig names, give your own BED.
 # get_chr_dict (samtools_idx.txt: per-chr read counts that set the 5 split windows) reads the SAME filtered bam,
 # so the counts match what get_consensus_fasta sees.
 CONSENSUS_EXCLUDE_BED_USER = config['params'].get('consensus_exclude_bed') or ''
-CONSENSUS_EXCLUDE_GLOBIN = bool(CONSENSUS_EXCLUDE_BED_USER) or bool(config['params'].get(
-    'consensus_exclude_globin', config['params'].get('library_species', 'human') == 'human'))
+CONSENSUS_EXCLUDE_GLOBIN = bool(config['params'].get('consensus_exclude_globin', False))
 CONSENSUS_EXCLUDE_BED = CONSENSUS_EXCLUDE_BED_USER or str(Path(config['params']['src_dir']) / "modules" / "clfr" / "consensus_fasta" / "globin_regions.bed")
 CONSENSUS_BAM_PAT = "Align/{id}.sort.removedup_rm000" + (".noglobin" if CONSENSUS_EXCLUDE_GLOBIN else "") + ".bam"
 CONSENSUS_BAM = CONSENSUS_BAM_PAT.replace("{id}", config['samples']['id'])
