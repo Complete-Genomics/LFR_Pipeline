@@ -9,9 +9,18 @@ import pandas as pd
 # parser.add_argument("-o", "--prefix", required=True)
 # args = parser.parse_args()
 
-input = 'split_stat_read1.log'
+import argparse
+import os
+
+parser = argparse.ArgumentParser()
+parser.add_argument("logs", nargs="*", default=['split_stat_read1.log', 'split_stat_read1_2.log'],
+                    help="split_stat_read1.log files to merge (duplicate (index, umi) are summed)")
+parser.add_argument("--cutoff", type=int, default=25)
+parser.add_argument("--outdir", default=".")
+args = parser.parse_args()
+inputs = args.logs
 # prefix = 'split_log'
-cutoff = 25
+cutoff = args.cutoff
 
 
 def bin_umi(per_umi):
@@ -40,21 +49,26 @@ def bin_umi(per_umi):
     return summary
 
 
-df = pd.read_csv(
-    input,
-    sep="\t",
-    header=None, skiprows=4, 
-    names=["index", "read_count", "umi"],
-    dtype={"index": str, "umi": str},
+df = pd.concat(
+    [
+        pd.read_csv(
+            f,
+            sep="\t",
+            header=None, skiprows=4,
+            names=["index", "read_count", "umi"],
+            dtype={"index": str, "umi": str},
+        )
+        for f in inputs
+    ],
+    ignore_index=True,
 )
 
 df["read_count"] = pd.to_numeric(df["read_count"], errors="raise")
-per_umi = df
-# 同一 (index, umi) 多行时，合并其 read count
-# per_umi = (
-#     df.groupby(["index", "umi"], as_index=False)["read_count"]
-#       .sum()
-# )
+# 两个 log 中重复的 (index, umi)：合并其 read count
+per_umi = (
+    df.groupby(["index", "umi"], as_index=False)["read_count"]
+      .sum()
+)
 counts = per_umi.loc[per_umi["read_count"] >= cutoff, "read_count"]
 
 stats = pd.DataFrame([{
@@ -68,9 +82,9 @@ stats = pd.DataFrame([{
     # "n_umi_gt_1000": (counts > 1000).sum(),
 }])
 
-stats.to_csv(f"N{cutoff}.per_umi_read_count.stats.tsv", sep="\t", index=False)
+stats.to_csv(f"{args.outdir}/N{cutoff}.per_umi_read_count.stats.tsv", sep="\t", index=False)
 bin_umi(per_umi).to_csv(
-    f"N{cutoff}.per_umi_read_count.bins.tsv", sep="\t", index=False
+    f"{args.outdir}/N{cutoff}.per_umi_read_count.bins.tsv", sep="\t", index=False
 )
 # per_umi.to_csv(f"{prefix}.per_umi_read_count.tsv", sep="\t", index=False)
 

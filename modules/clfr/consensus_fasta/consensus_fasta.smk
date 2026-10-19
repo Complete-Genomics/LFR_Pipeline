@@ -254,6 +254,41 @@ rule fasta_frag_len_distribution_consensus:
                     "--module metrics_basic"] 
         shell(" ".join(command))
 
+rule consensus_summary_report:
+    input:
+        counts = "consensus/consensus_assembly_counts.tsv",
+        idx = "Align/samtools_idx.txt",
+        split_log = "split_stat_read1.log"
+    output:
+        "consensus/summary_report.txt"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        cutoff = config['params']['reads_per_BC']
+    benchmark:
+        "Benchmarks/consensus_fasta.consensus_summary_report.txt"
+    shell:
+        """
+        set -euo pipefail
+        tmpdir=$(mktemp -d)
+        {params.python} {params.src_dir}/modules/shared/metrics/count_umi.py {input.split_log} \\
+            --cutoff {params.cutoff} --outdir $tmpdir
+        {{
+            echo "## consensus_assembly_counts"
+            cat {input.counts}
+            echo
+            echo "## total mapped reads"
+            awk '{{n+=$3}} END{{print n}}' {input.idx}
+            echo
+            echo "## reads/bc bin distribution (cutoff N>={params.cutoff})"
+            cat $tmpdir/N{params.cutoff}.per_umi_read_count.bins.tsv
+            echo
+            echo "## per-bc read count stats (N>={params.cutoff})"
+            cat $tmpdir/N{params.cutoff}.per_umi_read_count.stats.tsv
+        }} > {output}
+        rm -rf $tmpdir
+        """
+
 rule map_fasta_consensus:
     input:
         "consensus/consensus.fasta"
