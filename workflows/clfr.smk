@@ -133,6 +133,8 @@ def run_all_input(wildcards):
     if config['modules']['consensus_fasta'] == True:
         run_all_files.extend([ 'consensus/consensus.fasta', "consensus/consensus_frag_length_distribution.png",'consensus/consensus.fixRC.fasta', 'consensus/summary_report.txt'])
         # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
+        if config['params'].get('consensus_salvage', False):
+            run_all_files.append('consensus/salvage_summary.tsv')
 
     if config['modules'].get('resource_allocation', False):
         run_all_files.append(

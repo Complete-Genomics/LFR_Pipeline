@@ -70,6 +70,14 @@ params:
     consensus_drop_intronic_mono_exon: False
     # consensus_gtf: ""              # annotation GTF; default gencode.v49 under <ref_fa>/../Data_and_Tools/data/hg38/gtf/Gencode_human/
     # consensus_intronic_frac: 0.5   # drop when >= this fraction of the transcript's bases is intronic
+    # Salvage reads from low-depth UMIs (< reads_per_BC) before consensus (consensus_fasta.smk, OFF by default).
+    # A read moves to a valid UMI (>= reads_per_BC on that chr) if the UMIs differ by <= salvage_max_mm substitutions AND the read
+    # lies inside that UMI's fragment (+/- salvage_pad bp; 0 = fragments are never extended). Reads that tie between several valid
+    # UMIs are left alone. Per-chr stats incl. a position-shuffled chance estimate: consensus/salvage_summary.tsv
+    consensus_salvage: False
+    # salvage_max_mm: 2              # 1 or 2
+    # salvage_pad: 0
+    # salvage_mem_mb: 8000           # per chr; large chromosomes may need more
     # cLFR mRNA mapper is selected by read_len: <=150 uses HISAT2; >150 uses minimap2. gDNA uses BWA.
     # 'minimap2' -> map_reads_minimap (genome). GENCODE composition is a separate module: modules.genecode.
     mrna_mapper: 'minimap2'

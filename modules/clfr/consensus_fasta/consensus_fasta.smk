@@ -24,6 +24,14 @@ CONSENSUS_EXCLUDE_BED = CONSENSUS_EXCLUDE_BED_USER or str(Path(config['params'][
 CONSENSUS_BAM_PAT = "Align/{id}.sort.removedup_rm000" + (".noglobin" if CONSENSUS_EXCLUDE_GLOBIN else "") + ".bam"
 CONSENSUS_BAM = CONSENSUS_BAM_PAT.replace("{id}", config['samples']['id'])
 
+# ---- optional salvage of low-depth UMI reads (params.consensus_salvage, default false) ----
+# Moves reads of UMIs with < reads_per_BC reads into a valid UMI on the same chr when the UMI differs by <= salvage_max_mm
+# substitutions and the read lies inside that UMI's fragment (see salvage_umi.py). get_consensus_fasta then reads the
+# salvaged name-sorted bam instead of Align/tmp/{id}_{chr}.name.sort.bam.
+CONSENSUS_SALVAGE = bool(config['params'].get('consensus_salvage', False))
+CONSENSUS_NAMESORT_BAM = ("Align/tmp/{id}_{chr}.name.salvage.sort.bam" if CONSENSUS_SALVAGE
+                          else "Align/tmp/{id}_{chr}.name.sort.bam")
+
 if CONSENSUS_EXCLUDE_GLOBIN:
     rule filter_globin_bam:
         input:
@@ -122,10 +130,76 @@ rule sort_reformated_bam:
 
 # samtools sort -n -o Align/${chr}.name.sort.bam Align/${chr}.name.bam
 
+rule salvage_umi_map:
+    input:
+        bam = "Align/tmp/{id}_{chr}.name.sort.bam",
+        split_log = "split_stat_read1.log"
+    output:
+        reads = "consensus/salvage/{id}_{chr}.salvage_reads.tsv",
+        stats = "consensus/salvage/{id}_{chr}.salvage_stats.tsv"
+    threads: 1
+    resources:
+        mem_mb = config['params'].get('salvage_mem_mb', 8000)
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        samtools = config['params'].get('samtools', 'samtools'),
+        min_reads = config['params']['reads_per_BC'],
+        max_mm = config['params'].get('salvage_max_mm', 2),
+        pad = config['params'].get('salvage_pad', 0)
+    benchmark:
+        "Benchmarks/consensus_fasta.salvage_umi_map.{id}.{chr}.txt"
+    shell:
+        "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/salvage_umi.py --module map "
+        "--input_bam {input.bam} --chrom {wildcards.chr} --split_log {input.split_log} "
+        "--min_reads {params.min_reads} --max_mm {params.max_mm} --pad {params.pad} "
+        "--samtools {params.samtools} --output_reads {output.reads} --output_stats {output.stats}"
+
+# renaming changes the name order, so salvage_umi_apply re-sorts by name (consensus_fasta.py groups consecutive reads by UMI)
+rule salvage_umi_apply:
+    input:
+        bam = "Align/tmp/{id}_{chr}.name.sort.bam",
+        reads = "consensus/salvage/{id}_{chr}.salvage_reads.tsv"
+    output:
+        bam = "Align/tmp/{id}_{chr}.name.salvage.sort.bam"
+    params:
+        python = config['params']['general_python'],
+        src_dir = config['params']['src_dir'],
+        samtools = config['params'].get('samtools', 'samtools')
+    threads:
+        config['threads'].get('consensus_name_sort', 2)
+    benchmark:
+        "Benchmarks/consensus_fasta.salvage_umi_apply.{id}.{chr}.txt"
+    shell:
+        "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/salvage_umi.py --module apply "
+        "--input_bam {input.bam} --reads_table {input.reads} --output_bam {output.bam}.unsorted.bam && "
+        "{params.samtools} sort -@ {threads} -n -o {output.bam} {output.bam}.unsorted.bam && "
+        "rm -f {output.bam}.unsorted.bam"
+
+rule salvage_summary:
+    input:
+        expand("consensus/salvage/{id}_{chr}.salvage_stats.tsv", id=config['samples']['id'], chr=CHROMS)
+    output:
+        "consensus/salvage_summary.tsv"
+    benchmark:
+        "Benchmarks/consensus_fasta.salvage_summary.txt"
+    run:
+        header, rows = None, []
+        for f in input:
+            with open(f) as fh:
+                header = next(fh).rstrip("\n").split("\t")
+                rows.append(next(fh).rstrip("\n").split("\t"))
+        with open(output[0], "w") as out:
+            out.write("\t".join(header) + "\n")
+            for r in rows:
+                out.write("\t".join(r) + "\n")
+            totals = [str(sum(int(r[i]) for r in rows)) for i in range(1, len(header))]
+            out.write("\t".join(["all"] + totals) + "\n")
+
 
 rule get_consensus_fasta:
     input:
-        bam="Align/tmp/{id}_{chr}.name.sort.bam", 
+        bam=CONSENSUS_NAMESORT_BAM,
         chr_dict = "Align/samtools_idx.txt"     
     output:
         fasta = "consensus/tmp/{chr}/{id}_{chr}_{split_idx}.fasta",
