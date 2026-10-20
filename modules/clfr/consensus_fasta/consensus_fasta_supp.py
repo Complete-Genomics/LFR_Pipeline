@@ -33,7 +33,8 @@ def reformat_readid(chr_name, seq_type, input_bam, output_bam):
         output_bam = f"Align/tmp/data_{chr_name}.name.bam"
 
     samfile = pysam.AlignmentFile(input_bam, "rb")
-    outfile = pysam.AlignmentFile(output_bam, "wb", template=samfile)
+    # "-" streams uncompressed BAM to stdout so samtools sort -n can read it from a pipe
+    outfile = pysam.AlignmentFile(output_bam, "wb0" if output_bam == "-" else "wb", template=samfile)
     
     for read in samfile:
         readid = read.query_name
@@ -44,7 +45,7 @@ def reformat_readid(chr_name, seq_type, input_bam, output_bam):
         if seq_type in ('pe', 'se'):
             read.query_name = '#'.join([umi, pos, readid])
         else:
-            print('needs SEQUENCE_TYPE')
+            print('needs SEQUENCE_TYPE', file=sys.stderr)  # stdout may carry the BAM stream
         outfile.write(read)
     outfile.close()
     return 

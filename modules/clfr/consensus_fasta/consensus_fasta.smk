@@ -86,46 +86,28 @@ rule split_consensus_bam:
     shell:
         "{params.samtools} view -bh {input.bam} {wildcards.chr} > {output.bam}"
         
+# reformat read ids and name-sort in one step: reformat_readid streams uncompressed BAM into samtools sort -n (no intermediate name.bam)
 rule reformat_readid:
     input:
         bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam"
     output:
-        "Align/tmp/{id}_{chr}.name.bam"
+        "Align/tmp/{id}_{chr}.name.sort.bam"
     params:
         python = config['params']['general_python'],
         src_dir = config['params']['src_dir'],
-        seq_type = SEQUENCE_TYPE, 
+        seq_type = SEQUENCE_TYPE,
         umi_len = config['params']['cbc_len'],
-    benchmark:
-        "Benchmarks/consensus_fasta.reformat_readid.{id}.{chr}.txt"
-    run:
-        command = ["{params.python}",
-                    "{params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py",
-                    "--module reformat_readid",
-                    "--seq_type {params.seq_type} ",
-                    "--umi_len {params.umi_len} ",
-                    "--chr_name {wildcards.chr}",
-                    "--input_bam {input.bam}",
-                    "--output_bam {output}"] 
-        shell(" ".join(command))
-
-        # "python {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py --module reformat_readid --chr_name {wildcards.chr}"
-
-rule sort_reformated_bam:
-    input:
-        "Align/tmp/{id}_{chr}.name.bam"
-    output:
-        "Align/tmp/{id}_{chr}.name.sort.bam"
-    params:
         samtools = config['params'].get('samtools', 'samtools')
     threads:
         config['threads'].get('consensus_name_sort', 2)
     benchmark:
-        "Benchmarks/consensus_fasta.sort_reformated_bam.{id}.{chr}.txt"
+        "Benchmarks/consensus_fasta.reformat_readid.{id}.{chr}.txt"
     shell:
-        "{params.samtools} sort -@ {threads} -n -o {output} {input} "
-
-# samtools sort -n -o Align/${chr}.name.sort.bam Align/${chr}.name.bam
+        "set -o pipefail; "
+        "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py "
+        "--module reformat_readid --seq_type {params.seq_type} --umi_len {params.umi_len} "
+        "--chr_name {wildcards.chr} --input_bam {input.bam} --output_bam - | "
+        "{params.samtools} sort -@ {threads} -n -o {output} -"
 
 rule salvage_umi_map:
     input:
