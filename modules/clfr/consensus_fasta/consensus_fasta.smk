@@ -78,20 +78,17 @@ rule split_consensus_bam:
         bam = CONSENSUS_BAM_PAT,
         bai = CONSENSUS_BAM_PAT + ".bai"
     output:
-        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
-        bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
+        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam"
     params:
         samtools = config['params'].get('samtools', 'samtools')
     benchmark:
         "Benchmarks/consensus_fasta.split_consensus_bam.{id}.{chr}.txt"
     shell:
-        "{params.samtools} view -bh {input.bam} {wildcards.chr} > {output.bam} && "
-        "{params.samtools} index {output.bam}"
+        "{params.samtools} view -bh {input.bam} {wildcards.chr} > {output.bam}"
         
 rule reformat_readid:
     input:
-        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam",
-        bai = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam.bai"
+        bam = "Make_Vcf/step3_hapcut/step1_modify_bam/{id}_sort.markdup_{chr}.bam"
     output:
         "Align/tmp/{id}_{chr}.name.bam"
     params:
