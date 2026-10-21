@@ -101,7 +101,7 @@ rule coverage_bias:
 
 rule coverage_bias_boxplot:
     params:
-        name_sample = config['samples']['lanes'],
+        name_sample = config['samples']['name'],
         num_bin_in_frag = config['calc_frag']['num_bin_in_frag'],
         read_len = config['params']['read_len'],
         python = config['params']['general_python'],

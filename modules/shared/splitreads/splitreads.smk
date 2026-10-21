@@ -14,7 +14,7 @@ def get_fastqs_one(wildcards):
     # get fq base path from config
     fq_path = Path(config['samples']['fq_path'])
     # get lanes to add to the path
-    lanes = config['samples']['lanes']
+    lanes = config['samples'].get('lanes') or [config['samples']['name']]
     fq_files = []
     for lane in lanes:
         # set aggregate path for each lane
@@ -31,7 +31,7 @@ def get_fastqs_two(wildcards):
     # get fq base path from config
     fq_path = Path(config['samples']['fq_path'])
     # get lanes to add to the path
-    lanes = config['samples']['lanes']
+    lanes = config['samples'].get('lanes') or [config['samples']['name']]
     fq_files= []
     for lane in lanes:
         # set aggregate path for each lane
@@ -59,7 +59,7 @@ rule cat_read_one:
         "data/read_1.fq.gz"
     run:
         fq_path = Path(config['samples']['fq_path'])
-        lane = config['samples']['lanes']
+        lane = config['samples'].get('lanes') or [config['samples']['name']]
         if SEQUENCE_TYPE=='pe':
             # if their are multiple files concatenate them
             if len(lane) > 1:
@@ -79,7 +79,7 @@ rule cat_read_two:
         "data/read_2.fq.gz"
     run:
         fq_path = Path(config['samples']['fq_path'])
-        lane = config['samples']['lanes']
+        lane = config['samples'].get('lanes') or [config['samples']['name']]
         if SEQUENCE_TYPE=='se':
             shell("ln -s ../{input} {output}")
         elif SEQUENCE_TYPE=='pe':

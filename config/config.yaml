@@ -1,8 +1,7 @@
 samples:
     ########### start fill ###
-    # list of lanes to use. format as fastq/V350094071_L04, leave blank if start from split.read.fq.gz,
-    # in the format of *_1.fq.gz
-    lanes: [V350132145]
+    # sample/lane name, also used as the sample label in plots. Raw reads are read from fq_path/<name>/*_read_{1,2}.fq.gz
+    # when starting from raw fastq; leave unused if start from split.read.fq.gz
     name: "V350132145"
     ########### end fill ###
 
