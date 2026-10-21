@@ -16,11 +16,12 @@ import itertools
 import argparse
 
 
-def run_capture(cmd, check=True, text=True):
+def run_capture(cmd, check=True, text=True, timeout=None):
     kwargs = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "check": check,
+        "timeout": timeout,
     }
     if text:
         kwargs["universal_newlines"] = True
@@ -47,6 +48,10 @@ parser.add_argument("--batch_id", type=str, default="", required=False)
 parser.add_argument("--samtools", type=str, default=None, required=False)
 parser.add_argument("--temp_dir", type=str, default="/dev/shm", required=False)
 parser.add_argument("--stats_file", type=str, default=None, required=False)
+parser.add_argument("--max_reads_per_umi", type=int, default=5000, required=False,
+                    help="skip UMI groups with more reads than this (barcode collisions)")
+parser.add_argument("--tool_timeout", type=int, default=120, required=False,
+                    help="seconds before a StringTie / samtools consensus call is killed and the UMI group skipped")
 parser.add_argument("--use_samtools_reference", action="store_true")
 parser.add_argument("--drop_intronic_mono_exon", action="store_true",
                     help="drop StringTie mono-exon transcripts that lie mostly inside annotated introns")
@@ -111,6 +116,8 @@ def log_samtools_runtime(samtools_path, consensus_has_ref, use_reference):
 # --- Configuration ---
 MIN_FRAG_LEN = 400
 MAX_FRAG_LEN = 20000
+MAX_READS_PER_UMI = args.max_reads_per_umi
+TOOL_TIMEOUT = args.tool_timeout
 REF = reference_fasta_file
 DATA_TOOLS_ROOT = get_data_tools_root(REF)
 GTF = args.gtf or os.path.join(DATA_TOOLS_ROOT, "data/hg38/gtf/Gencode_human/gencode.v49.annotation.gtf")
@@ -328,7 +335,7 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
 
     ]
     try:
-        result = run_capture(stringtie_cmd)
+        result = run_capture(stringtie_cmd, timeout=TOOL_TIMEOUT)
         # gtf_lines = result.stdout.strip().split("\n")
         with open(temp_gtf_path, 'r') as gtf_file:
             gtf_lines = gtf_file.read().strip().split("\n")
@@ -453,6 +460,9 @@ def generate_bed_data(reads_list_obj, header_dict, stringtie_path, current_temp_
                 for chrom, start, end in exons:
                     length = end - start
                     bed_lines.append(f"{chrom}\t{start}\t{end}\t{length}")
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(f"WARNING: stringtie timed out after {TOOL_TIMEOUT}s (UMI {umi_id}), skipping.\n")
+        bed_lines = []
     except subprocess.CalledProcessError as e:
         sys.stderr.write(f"Error running stringtie: {e.stderr}\n")
         bed_lines = []
@@ -499,14 +509,18 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     # into StringTie with no bundling limit can hang for minutes on a single
     # UMI group. A real fragment can't exceed MAX_FRAG_LEN, so reject anything
     # far beyond that before ever calling StringTie.
-    UMI_SPAN_SANITY_LIMIT = MAX_FRAG_LEN * 5
-    umi_positions = [
+    UMI_SPAN_SANITY_LIMIT = int(MAX_FRAG_LEN * 1.5)
+    if len(reads_list_obj) > MAX_READS_PER_UMI:
+        UMI_SPAN_SANITY_EXCEEDED_COUNT += 1
+        return None
+    umi_positions = sorted(
         read.reference_start for read in reads_list_obj
         if read.reference_start is not None and read.reference_start >= 0
-    ]
+    )
     if umi_positions:
-        umi_span = max(umi_positions) - min(umi_positions)
-        if umi_span > UMI_SPAN_SANITY_LIMIT:
+        umi_span = umi_positions[-1] - umi_positions[0]
+        max_gap = max((b - a for a, b in zip(umi_positions, umi_positions[1:])), default=0)
+        if umi_span > UMI_SPAN_SANITY_LIMIT or max_gap > MAX_FRAG_LEN:
             UMI_SPAN_SANITY_EXCEEDED_COUNT += 1
             return None
 
@@ -596,7 +610,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                 if SAMTOOLS_CONSENSUS_USES_REF:
                     cmd[3:3] = ["-T", REF]
                 try:
-                    result = run_capture(cmd)
+                    result = run_capture(cmd, timeout=TOOL_TIMEOUT)
                     consensus_fasta = result.stdout.strip()
                     consensus_lines = consensus_fasta.split("\n")
                     if len(consensus_lines) < 2:
@@ -608,6 +622,9 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
                     start_2bp, end_2bp = get_2bp_sequence_pysam(chrom, consensus_start, consensus_end)
                     
                     combined_seq += start_2bp + consensus_seq_core + end_2bp
+                except subprocess.TimeoutExpired:
+                    sys.stderr.write(f"WARNING: samtools consensus timed out after {TOOL_TIMEOUT}s (UMI {umi_id}, region {region}), skipping.\n")
+                    continue
                 except subprocess.CalledProcessError as e:
                     sys.stderr.write(f"Error running samtools consensus (UMI {umi_id}, region {region}): {e.stderr}\n")
                     continue
