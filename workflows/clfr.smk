@@ -135,6 +135,9 @@ def run_all_input(wildcards):
         # "consensus/consensus.fixRC_SQANTI3_report.pdf"])
         if config['params'].get('consensus_salvage', False):
             run_all_files.append('consensus/salvage_summary.tsv')
+        if config['params'].get('consensus_cleanup', True) and not config['modules']['phasing']:
+            run_all_files.extend(['consensus/.tmp.cleaned',
+                                  'Align/tmp/{}.consensus_split_bam.cleaned'.format(config['samples']['id'])])
 
     if config['modules'].get('resource_allocation', False):
         run_all_files.append(

@@ -2,6 +2,7 @@
 part of clfr workflow, get (transcriptome) fasta
 '''
 
+import shutil
 from pathlib import Path
 
 NUM_SPLITS_CONSENSUS=5
@@ -341,6 +342,33 @@ rule consensus_summary_report:
         }} > {output}
         rm -rf $tmpdir
         """
+
+# ---- cleanup of intermediates (params.consensus_cleanup, default true) ----
+# Only deletes what nothing downstream reads any more; the markers are requested from clfr.smk run_all, which keeps the order.
+#   split bams: after every Align/tmp/{id}_{chr}.name.sort.bam exists. The name.sort.bam itself is kept (input of
+#     get_consensus_fasta / salvage_umi_*). Only the consensus split bams are removed, not the rest of Make_Vcf/.
+#   Skipped when modules.phasing is on (hapcut reads the same split bams).
+#   consensus/tmp: after consensus.fasta AND fasta_frag_len_distribution_consensus (it still reads the assembly_counts.tsv here).
+rule cleanup_consensus_split_bam:
+    input:
+        expand("Align/tmp/{id}_{chr}.name.sort.bam", id=config['samples']['id'], chr=CHROMS)
+    output:
+        "Align/tmp/{id}.consensus_split_bam.cleaned"
+    run:
+        for chrom in CHROMS:
+            Path("Make_Vcf/step3_hapcut/step1_modify_bam/{}_sort.markdup_{}.bam".format(wildcards.id, chrom)).unlink(missing_ok=True)
+        Path(output[0]).touch()
+
+rule cleanup_consensus_tmp:
+    input:
+        fasta = "consensus/consensus.fasta",
+        png = "consensus/consensus_frag_length_distribution.png",
+        stats = "consensus/consensus_assembly_counts.tsv"
+    output:
+        "consensus/.tmp.cleaned"
+    run:
+        shutil.rmtree("consensus/tmp", ignore_errors=True)
+        Path(output[0]).touch()
 
 rule map_fasta_consensus:
     input:
