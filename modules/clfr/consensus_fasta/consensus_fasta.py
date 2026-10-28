@@ -492,17 +492,17 @@ def get_2bp_sequence_pysam(chrom, start, end):
         sys.stderr.write(f"WARNING: Error extracting 2bp sequence from {chrom}:{start}-{end} using pysam: {e}\n")
         return "", ""
 
-def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
-    """Process a UMI group's reads to generate a consensus sequence."""
-    global ASSEMBLED_READ_COUNT, EMPTY_CONSENSUS_COUNT, UMI_SPAN_SANITY_EXCEEDED_COUNT
-    
+def umi_group_passes_filters(umi_id, reads_list_obj):
+    """Read-count and span sanity checks shared by both process_umi_group_* entry points."""
+    global UMI_SPAN_SANITY_EXCEEDED_COUNT
+
     if not reads_list_obj:
         sys.stderr.write(f"WARNING: UMI ID '{umi_id}' has no reads data, skipping.\n")
-        return None
+        return False
 
     if len(reads_list_obj) < MIN_READS:
         # sys.stderr.write(f"WARNING: UMI ID '{umi_id}' read count {len(reads_list_obj)} < {MIN_READS}, skipping.\n")
-        return None
+        return False
 
     # Guard against barcode collisions: unrelated molecules sharing the same
     # UMI by chance can scatter reads across tens of megabases. Feeding that
@@ -512,7 +512,7 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
     UMI_SPAN_SANITY_LIMIT = int(MAX_FRAG_LEN * 1.5)
     if len(reads_list_obj) > MAX_READS_PER_UMI:
         UMI_SPAN_SANITY_EXCEEDED_COUNT += 1
-        return None
+        return False
     umi_positions = sorted(
         read.reference_start for read in reads_list_obj
         if read.reference_start is not None and read.reference_start >= 0
@@ -522,15 +522,29 @@ def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, re
         max_gap = max((b - a for a, b in zip(umi_positions, umi_positions[1:])), default=0)
         if umi_span > UMI_SPAN_SANITY_LIMIT or max_gap > MAX_FRAG_LEN:
             UMI_SPAN_SANITY_EXCEEDED_COUNT += 1
-            return None
+            return False
+    return True
 
-    # Downsample reads if ratio < 1.0
-    if DOWNSAMPLE_RATIO < 1.0 and len(reads_list_obj) > 1:
+def process_umi_group_single_thread(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
+    """Process a UMI group's reads to generate a consensus sequence (no downsampling)."""
+    if not umi_group_passes_filters(umi_id, reads_list_obj):
+        return None
+    return build_umi_consensus(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir)
+
+def process_umi_group_single_thread_downsample(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
+    """Same as process_umi_group_single_thread, but randomly keeps DOWNSAMPLE_RATIO of the reads first."""
+    if not umi_group_passes_filters(umi_id, reads_list_obj):
+        return None
+    if len(reads_list_obj) > 1:
         target_count = max(1, int(len(reads_list_obj) * DOWNSAMPLE_RATIO))
         # Sample indices and sort to preserve original order
         rng = random.Random(umi_id)
         indices = sorted(rng.sample(range(len(reads_list_obj)), target_count))
         reads_list_obj = [reads_list_obj[i] for i in indices]
+    return build_umi_consensus(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir)
+
+def build_umi_consensus(umi_id, reads_list_obj, header_dict_data, ref_fasta_path, current_temp_dir):
+    global ASSEMBLED_READ_COUNT, EMPTY_CONSENSUS_COUNT
 
     bed_lines = generate_bed_data(reads_list_obj, header_dict_data, STRINGTIE_PATH, current_temp_dir, umi_id)
     # print(f'{umi_id}')
@@ -670,6 +684,11 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
     os.makedirs(output_dir or '.', exist_ok=True)
 
     header_dict = infile.header.to_dict()
+    # pick once so the per-UMI path does not re-check the ratio
+    process_umi_group = (
+        process_umi_group_single_thread_downsample if DOWNSAMPLE_RATIO < 1.0
+        else process_umi_group_single_thread
+    )
     current_umi = None
     current_reads_buffer = [] # Store pysam.AlignedSegment objects directly
     read_count = 0
@@ -692,7 +711,7 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
                 
                 if umi_id != current_umi:
                     if current_reads_buffer:
-                        fasta_record = process_umi_group_single_thread(
+                        fasta_record = process_umi_group(
                             current_umi, current_reads_buffer, header_dict, reference_fasta, current_temp_dir
                         )
                         if fasta_record:
@@ -707,7 +726,7 @@ def generate_consensus_sequential_to_single_file(input_bam, reference_fasta, out
 
             # Process the last UMI group
             if current_umi is not None and current_reads_buffer:
-                fasta_record = process_umi_group_single_thread(
+                fasta_record = process_umi_group(
                     current_umi, current_reads_buffer, header_dict, reference_fasta, current_temp_dir
                 )
                 if fasta_record:
