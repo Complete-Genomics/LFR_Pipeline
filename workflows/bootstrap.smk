@@ -66,3 +66,37 @@ for _name, _default in {
     "featurecounts": "featureCounts",
 }.items():
     _set_default_param(_name, _default)
+
+
+# ---- run identity lines in .snakemake/log/*.snakemake.log -------------------
+# The Snakemake log never says which OS process wrote it. These one-line,
+# key=value records name the master process (pid/host/user/cwd/cores), so a log
+# reader -- a person, or the LLM triage in Agentic_Triage/lfr_watch.py -- can tell
+# "this process finished" from "this process vanished". A log that has the start
+# line but no end line means the master was killed (kill -9, OOM, server down).
+import os
+import socket
+import getpass
+from snakemake.logging import logger
+
+
+def _run_identity():
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = os.environ.get("USER", "?")
+    return "pid=%d ppid=%d host=%s user=%s cwd=%s cores=%s" % (
+        os.getpid(), os.getppid(), socket.gethostname(), user, os.getcwd(),
+        getattr(workflow, "cores", "?"))
+
+
+onstart:
+    logger.info("[LFR_RUN] start %s cmd=%s" % (_run_identity(), " ".join(sys.argv)))
+
+
+onsuccess:
+    logger.info("[LFR_RUN] end status=success pid=%d" % os.getpid())
+
+
+onerror:
+    logger.info("[LFR_RUN] end status=error pid=%d" % os.getpid())
