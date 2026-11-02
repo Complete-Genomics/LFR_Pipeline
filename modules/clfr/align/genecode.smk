@@ -6,7 +6,7 @@
 # The combined reference (transcripts + rRNA + genome decoy) is built once, outside this workflow, by
 # build_genecode_ref.sh and shared by all samples (params.genecode_ref, default: next to genecode_transcripts).
 # Input is the UN-trimmed split read data/split_read.2.fq.gz (SE600): sample first, then trim only the sample with the
-# pipeline's own trim_reads recipe (same params.adapter_ref*/trim_* settings), so the whole library is never trimmed.
+# trim_reads recipe (same params.adapter_ref*/trim_* settings, written out in trim_sub_genecode), so the whole library is never trimmed.
 # params.genecode_trimmed_fq (optional) = an already split + trimmed fastq: sampled as is, no trim.
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
 #   subsample_reads_genecode  -> genecode/{id}.sub.raw.fq.gz   (untrimmed sample)
@@ -116,17 +116,62 @@ rule subsample_reads_genecode:
 
 
 if not GENECODE_TRIMMED_GIVEN:
-    # Same recipe as splitreads.smk trim_reads (shell + params come from there, so adapter_ref*, trim_q, trim_polya ... in
-    # config.yaml apply identically); only input/output differ. Needs splitreads.smk included BEFORE this file.
-    use rule trim_reads as trim_sub_genecode with:
+    # Same bbduk recipe and the same config switches as splitreads.smk trim_reads (SE only), applied to the sample:
+    # up to four bbduk stages chained through pipes (5' contaminant -> 3' linker -> 3' adapter + qtrim -> polyA); only the
+    # last writes to disk. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
+    rule trim_sub_genecode:
         input:
-            f1 = GENECODE_SUB_RAW,
-            f2 = GENECODE_SUB_RAW
+            GENECODE_SUB_RAW
         output:
-            t1 = temp("genecode/{}.sub.trim_1.fq.gz".format(GENECODE_ID)),
-            t2 = GENECODE_SUB
+            GENECODE_SUB
+        params:
+            bbduk = config['params']['bbduk'],
+            adapter_ref = config['params'].get('adapter_ref', ''),
+            adapter_ref_k = int(config['params'].get('adapter_ref_k', 23)),
+            trim_5p_contam = str(config['params'].get('adapter_ref_5p', False)).strip().lower() in ("true", "1", "yes"),
+            adapter_ref_5p_file = config['params'].get('adapter_ref_5p_file', ''),
+            trim_3p_linker = str(config['params'].get('adapter_ref_3p', False)).strip().lower() in ("true", "1", "yes"),
+            adapter_ref_3p_file = config['params'].get('adapter_ref_3p_file', ''),
+            trim_polya = int(config['params'].get('trim_polya', 0)),
+            trim_q = int(config['params'].get('trim_q', 6)),
+            trim_maq = int(config['params'].get('trim_maq', 0)),
+            trim_mgi = str(config['params'].get('trim_mgi_adapter', True)).strip().lower() in ("true", "1", "yes"),
+            trim_qtrim = str(config['params'].get('trim_qtrim', True)).strip().lower() in ("true", "1", "yes"),
+            trim_5p_restrict_left = int(config['params'].get('trim_5p_restrict_left', 30)),
+            trim_minlen = int(config['params'].get('trim_minlen', 10)),
+            trim_maxns = int(config['params'].get('trim_maxns', 0))
         benchmark:
             "Benchmarks/main.trim_sub_genecode.txt"
+        shell:
+            """
+            ADAPTER_ARGS=""
+            if [[ -n "{params.adapter_ref}" && "{params.trim_mgi}" == "True" ]]; then
+                ADAPTER_ARGS="ktrim=r ref={params.adapter_ref} k={params.adapter_ref_k} hdist=1"
+            fi
+            ORIG_IN="in={input}"; PIPE_IN="in=stdin.fq int=f"; MID_OUT="out=stdout.fq"; FINAL_OUT="out={output}"
+            MAIN_ARGS=""
+            if [[ "{params.trim_qtrim}" == "True" ]]; then MAIN_ARGS="qtrim=rl trimq={params.trim_q}"; fi
+            if [[ {params.trim_maxns} -ge 0 ]]; then MAIN_ARGS="$MAIN_ARGS maxns={params.trim_maxns}"; fi
+            MAIN_ARGS="$MAIN_ARGS minlen={params.trim_minlen}"
+            if [[ {params.trim_maq} -gt 0 ]]; then MAIN_ARGS="$MAIN_ARGS maq={params.trim_maq}"; fi
+
+            CMD=""
+            MAIN_IN="$ORIG_IN"
+            if [[ "{params.trim_5p_contam}" == "True" ]]; then
+                CMD="{params.bbduk} $ORIG_IN $MID_OUT ktrim=l k=17 mink=11 hdist=1 restrictleft={params.trim_5p_restrict_left} ref={params.adapter_ref_5p_file} | "
+                MAIN_IN="$PIPE_IN"
+            fi
+            if [[ "{params.trim_3p_linker}" == "True" ]]; then
+                CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT ktrim=r k=12 hdist=0 ref={params.adapter_ref_3p_file} | "
+                MAIN_IN="$PIPE_IN"
+            fi
+            if [[ {params.trim_polya} -gt 0 ]]; then
+                CMD="${{CMD}}{params.bbduk} $MAIN_IN $MID_OUT $MAIN_ARGS $ADAPTER_ARGS | {params.bbduk} $PIPE_IN $FINAL_OUT trimpolya={params.trim_polya}"
+            else
+                CMD="${{CMD}}{params.bbduk} $MAIN_IN $FINAL_OUT $MAIN_ARGS $ADAPTER_ARGS"
+            fi
+            eval "$CMD"
+            """
 
 
 rule map_reads_minimap_genecode:

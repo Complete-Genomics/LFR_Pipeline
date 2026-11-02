@@ -176,6 +176,8 @@ mrna_mapper = MRNA_MAPPER
 include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
+if GENECODE:
+    include: src_dir+"modules/clfr/align/genecode.smk"
 if GENECODE_CONSENSUS:
     include: src_dir+"modules/clfr/align/genecode_consensus.smk"
 if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
@@ -186,9 +188,6 @@ if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
 else:
     include: src_dir+"modules/clfr/align/align.main.smk"
 include: src_dir+"modules/shared/splitreads/splitreads.smk"
-if GENECODE:
-    # after splitreads.smk: genecode.smk reuses its trim_reads rule (use rule ... as)
-    include: src_dir+"modules/clfr/align/genecode.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 if config['modules'].get('vc_polish', False):
     include: src_dir+"modules/clfr/vc_polish/vc_polish.smk"
