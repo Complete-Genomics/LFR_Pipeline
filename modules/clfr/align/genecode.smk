@@ -5,10 +5,13 @@
 # minimap2 pass against transcripts + rRNA + genome decoy -> per-read classification.
 # The combined reference (transcripts + rRNA + genome decoy) is built once, outside this workflow, by
 # build_genecode_ref.sh and shared by all samples (params.genecode_ref, default: next to genecode_transcripts).
-# Input is params.genecode_trimmed_fq (a small already-trimmed slice is enough); blank = data/split_read_2_trimmed.fastq.gz,
-# which makes snakemake run split_reads / trim_reads over the whole library first.
+# Input is the UN-trimmed split read data/split_read.2.fq.gz (SE600): sample first, then trim only the sample with the
+# pipeline's own trim_reads recipe (same params.adapter_ref*/trim_* settings), so the whole library is never trimmed.
+# params.genecode_trimmed_fq (optional) = an already split + trimmed fastq: sampled as is, no trim.
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
-#   subsample_reads_genecode  -> genecode/{id}.sub.fq.gz
+#   subsample_reads_genecode  -> genecode/{id}.sub.raw.fq.gz   (untrimmed sample)
+#   trim_sub_genecode         -> genecode/{id}.sub.fq.gz       (= trim_reads on the sample; reads dropped by minlen/maxns/maq
+#                                                               make it a bit smaller than genecode_subsample_reads)
 # Subsample modes (params.genecode_subsample_mode): 'head' (default) = first N reads (fast, file-order
 # dependent); 'random' = seqtk read sampling, unbiased for the read-level %; 'umi' = sample whole UMIs (set explicitly), so
 # every sampled UMI keeps ALL its reads -- needed only for UMI-level %, since read sampling cuts reads/UMI.
@@ -36,12 +39,17 @@ if not os.path.exists(GENECODE_REF):
                      "params.genecode_ref at an existing file".format(GENECODE_REF))
 
 
-# Blank -> the pipeline's own trimmed SE600 read (split_reads + trim_reads run on demand over the full library).
-# A given path must exist: point it at a small pre-trimmed slice to skip split/trim.
-GENECODE_FQ = config['params'].get('genecode_trimmed_fq') or "data/split_read_2_trimmed.fastq.gz"
-if config['params'].get('genecode_trimmed_fq') and not os.path.exists(GENECODE_FQ):
+# Default input: the untrimmed split read; trim_sub_genecode trims the sample. A given genecode_trimmed_fq must exist and is
+# used as is (already split + trimmed, e.g. a small slice), which skips the trim.
+if config['params']['sequence_type'].lower() != 'se':
+    raise ValueError("modules.genecode supports SE600 only (params.sequence_type: se)")
+GENECODE_TRIMMED_GIVEN = bool(config['params'].get('genecode_trimmed_fq'))
+GENECODE_FQ = config['params'].get('genecode_trimmed_fq') or "data/split_read.2.fq.gz"
+if GENECODE_TRIMMED_GIVEN and not os.path.exists(GENECODE_FQ):
     raise ValueError("params.genecode_trimmed_fq must point to an existing split + trimmed fastq(.gz): "
                      "'{}'".format(GENECODE_FQ))
+GENECODE_SUB_RAW = "genecode/{}.sub.{}fq.gz".format(GENECODE_ID, "" if GENECODE_TRIMMED_GIVEN else "raw.")
+GENECODE_SUB = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
 
 GENECODE_SUB_MODE = config['params'].get('genecode_subsample_mode', 'head')
 if GENECODE_SUB_MODE not in ('umi', 'head', 'random'):
@@ -78,7 +86,7 @@ rule subsample_reads_genecode:
         fq = GENECODE_FQ,
         umis = "genecode/sampled_umis.txt" if GENECODE_SUB_MODE == 'umi' else []
     output:
-        fq = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
+        fq = GENECODE_SUB_RAW
     params:
         n = config['params'].get('genecode_subsample_reads', 400000),
         seed = config['params'].get('genecode_subsample_seed', 100),
@@ -107,10 +115,24 @@ rule subsample_reads_genecode:
         """
 
 
+if not GENECODE_TRIMMED_GIVEN:
+    # Same recipe as splitreads.smk trim_reads (shell + params come from there, so adapter_ref*, trim_q, trim_polya ... in
+    # config.yaml apply identically); only input/output differ. Needs splitreads.smk included BEFORE this file.
+    use rule trim_reads as trim_sub_genecode with:
+        input:
+            f1 = GENECODE_SUB_RAW,
+            f2 = GENECODE_SUB_RAW
+        output:
+            t1 = temp("genecode/{}.sub.trim_1.fq.gz".format(GENECODE_ID)),
+            t2 = GENECODE_SUB
+        benchmark:
+            "Benchmarks/main.trim_sub_genecode.txt"
+
+
 rule map_reads_minimap_genecode:
     input:
         ref = GENECODE_REF,
-        fq = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
+        fq = GENECODE_SUB
     output:
         bam = "genecode/{}.genecode.bam".format(GENECODE_ID)
     threads:

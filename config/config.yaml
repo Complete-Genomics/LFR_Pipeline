@@ -38,6 +38,9 @@ modules:
     # cLFR SE600: library composition vs GENCODE (protein_coding / lncRNA / rRNA / globin ...), modules/clfr/align/genecode.smk.
     # Additive and independent of mrna_mapper; set mapping/consensus_fasta False for a composition-only run.
     genecode: True
+    # same composition on the consensus transcripts (consensus/consensus.fixRC.fasta), modules/clfr/align/genecode_consensus.smk.
+    # Runs the consensus_fasta rules first if their output is missing.
+    genecode_consensus: False
     rna_16s: False               # mode: 'frag_denovo' or 'align_ref'
     frag_de_novo: False
     ### end fill ###
@@ -124,11 +127,11 @@ params:
     barcode_RC_GCswap: "/barcode_RC.GCswap.list"
     enforced_bc_list: ""
 
-    ref_fa: "hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa"
-    ref_fa_mrna: "hg38/GRCh38_latest_rna.fna.ercc.fasta"
-    ref_fa_other: "ref/other.fa"
-    toolsdir: "CGI_WGS_Pipeline/Data_and_Tools"
-    src_dir: "CGI_LFR_pipeline/"
+    ref_fa: "/mnt/qnap-archive/ycai/src/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.ercc.fa"
+    ref_fa_other: "/mnt/qnap-archive/ycai/projects/soybean/ref/glyma.58-161.gnm1.BW8J.genome_main.fna"
+    ref_fa_mrna: "/mnt/qnap-archive/ycai/src/master/dev/CGI_WGS_Pipeline/Data_and_Tools/data/hg38/ERCC/GRCh38_latest_rna.fna.ercc.fasta" 
+    toolsdir: "/mnt/qnap-archive/ycai/src/master/dev/CGI_WGS_Pipeline/Data_and_Tools/Data_and_Tools"
+    src_dir: "LFR_Pipeline/"
     gatk_install: "gatk"
     calc_frag_python: "python"
     dbsnp_path: "dbsnp_138.hg38.chrfix.vcf.gz"
@@ -164,8 +167,9 @@ params:
     # rRNA is largely absent from GENCODE: without the rRNA fasta (e.g. NCBI NR_046235 45S + NR_023363 5S)
     # rRNA reads cannot be counted; without the genome (GRCh38.primary_assembly, decoy) genomic/intronic
     # reads get forced onto transcripts.
-    # Input: split + trimmed SE600 fastq. Blank = data/split_read_2_trimmed.fastq.gz (the pipeline's own split_reads +
-    # trim_reads output, built on demand over the FULL library); on big data point this at a small pre-trimmed slice instead.
+    # Input: data/split_read.2.fq.gz (untrimmed). genecode samples it first, then trims only the sample with the same
+    # trim_reads settings as the rest of the pipeline (adapter_ref*, trim_q, trim_polya ...). Blank = this default.
+    # Set a path only for an already split + TRIMMED fastq (sampled as is, no trim).
     genecode_trimmed_fq: ""
     genecode_ref: ""
     genecode_transcripts: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"
@@ -183,6 +187,12 @@ params:
     # on the test data ambiguous was 2.84% at 5, 3.79% at 10, 4.79% at 20, 4.99% at 50 (20 ~ plateau, 30% fewer records)
     genecode_max_hits: 20
     genecode_min_cov: 0.5   # best hit must cover >= this fraction of the read, else low_cov (0.8 was too strict for SE600 3' quality decay)
+    # ---- modules.genecode_consensus (modules/clfr/align/genecode_consensus.smk) ----
+    # Reference = transcripts + rRNA (no genome decoy), built once:
+    #   build_genecode_ref.sh -t <genecode_transcripts> -r <genecode_rrna_fa> -o gencode.v50.transcripts_rRNA.fa.gz
+    # Blank = that file next to genecode_transcripts.
+    genecode_consensus_ref: ""
+    genecode_consensus_min_cov: 0.8   # best hit must cover >= this fraction of the consensus, else low_cov (globin/rRNA exempt)
     # samtools sort memory limit per sorting/compression thread.
     minimap_sort_mem: "8G"
 

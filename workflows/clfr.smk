@@ -9,6 +9,8 @@ if MRNA_MAPPER == 'minimap':
     MRNA_MAPPER = 'minimap2'
 # modules.genecode (SE600 composition vs GENCODE) is independent of the mapper chosen here
 GENECODE = bool(config['modules'].get('genecode', False))
+# modules.genecode_consensus: same composition on consensus/consensus.fixRC.fasta (needs the consensus_fasta rules)
+GENECODE_CONSENSUS = bool(config['modules'].get('genecode_consensus', False))
 if config['params']['library_type'] == 'mrna':
     MRNA_MAPPER = 'minimap2' if config['params']['read_len'] > 150 else 'hisat2'
 # Define the ref based on the config file
@@ -58,6 +60,9 @@ def run_all_input(wildcards):
     if GENECODE:
         run_all_files.extend(["genecode/{}.genecode_composition.tsv".format(config['samples']['id']),
                               "genecode/{}.genecode_composition.png".format(config['samples']['id'])])
+    if GENECODE_CONSENSUS:
+        run_all_files.extend(["genecode/{}.consensus.composition.tsv".format(config['samples']['id']),
+                              "genecode/{}.consensus.png".format(config['samples']['id'])])
 
     if config['modules']['mapping']==True:
         run_all_files.extend(["keep/Align/{}.sort.bam".format(config['samples']['id']),])
@@ -171,8 +176,8 @@ mrna_mapper = MRNA_MAPPER
 include: src_dir+"modules/clfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
 include: src_dir+"modules/clfr/align/align_supp.smk"
-if GENECODE:
-    include: src_dir+"modules/clfr/align/genecode.smk"
+if GENECODE_CONSENSUS:
+    include: src_dir+"modules/clfr/align/genecode_consensus.smk"
 if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
     if config['params'].get('minimap_parallel_split', False):
         include: src_dir+"modules/clfr/align/align.minimap_parallel.smk"
@@ -181,6 +186,9 @@ if config['params']['library_type'] == 'mrna' and mrna_mapper == 'minimap2':
 else:
     include: src_dir+"modules/clfr/align/align.main.smk"
 include: src_dir+"modules/shared/splitreads/splitreads.smk"
+if GENECODE:
+    # after splitreads.smk: genecode.smk reuses its trim_reads rule (use rule ... as)
+    include: src_dir+"modules/clfr/align/genecode.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 if config['modules'].get('vc_polish', False):
     include: src_dir+"modules/clfr/vc_polish/vc_polish.smk"
