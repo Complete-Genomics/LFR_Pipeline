@@ -5,13 +5,17 @@
 # minimap2 pass against transcripts + rRNA + genome decoy -> per-read classification.
 # The combined reference (transcripts + rRNA + genome decoy) is built once, outside this workflow, by
 # build_genecode_ref.sh and shared by all samples (params.genecode_ref, default: next to genecode_transcripts).
-# Input is the UN-trimmed split read data/split_read.2.fq.gz (SE600): sample first, then trim only the sample with the
-# trim_reads recipe (same params.adapter_ref*/trim_* settings, written out in trim_sub_genecode), so the whole library is never trimmed.
-# params.genecode_trimmed_fq (optional) = an already split + trimmed fastq: sampled as is, no trim.
+# Input, picked when the workflow is parsed (first match wins):
+#   1. params.genecode_trimmed_fq (explicit path)  \
+#   2. data/split_read_2_trimmed.fastq.gz exists   /  -> already trimmed: sample it as is, no trim
+#   3. otherwise data/split_read.2.fq.gz (SE600)       -> sample first, then trim only the sample (trim_sub_genecode, same
+#                                                         params.adapter_ref*/trim_* settings as trim_reads), so the whole
+#                                                         library is never trimmed
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
-#   subsample_reads_genecode  -> genecode/{id}.sub.raw.fq.gz   (untrimmed sample)
-#   trim_sub_genecode         -> genecode/{id}.sub.fq.gz       (= trim_reads on the sample; reads dropped by minlen/maxns/maq
-#                                                               make it a bit smaller than genecode_subsample_reads)
+#   subsample_reads_genecode  -> genecode/{id}.sub.fq.gz          (the sampled reads; already trimmed in case 1/2)
+#   trim_sub_genecode         -> genecode/{id}.sub.trimmed.fq.gz  (case 3 only; reads dropped by minlen/maxns/maq make it a
+#                                                                  bit smaller than genecode_subsample_reads)
+#   map_reads_minimap_genecode reads the trimmed sample: sub.trimmed.fq.gz (case 3) or sub.fq.gz (case 1/2)
 # Subsample modes (params.genecode_subsample_mode): 'head' (default) = first N reads (fast, file-order
 # dependent); 'random' = seqtk read sampling, unbiased for the read-level %; 'umi' = sample whole UMIs (set explicitly), so
 # every sampled UMI keeps ALL its reads -- needed only for UMI-level %, since read sampling cuts reads/UMI.
@@ -20,6 +24,7 @@
 #   plot_composition_genecode -> genecode/{id}.genecode_composition.png (barplot, reads % and UMI %)
 # Reads and UMIs are both reported: rRNA is often deep per molecule, so the two can differ a lot.
 import os
+import sys
 
 GENECODE_ID = config['samples']['id']
 GENECODE_THREADS = config['threads'].get('genecode_map', config['threads'].get('minimap_map', 24))
@@ -39,17 +44,23 @@ if not os.path.exists(GENECODE_REF):
                      "params.genecode_ref at an existing file".format(GENECODE_REF))
 
 
-# Default input: the untrimmed split read; trim_sub_genecode trims the sample. A given genecode_trimmed_fq must exist and is
-# used as is (already split + trimmed, e.g. a small slice), which skips the trim.
-if config['params']['sequence_type'].lower() != 'se':
-    raise ValueError("modules.genecode supports SE600 only (params.sequence_type: se)")
+# See the header for the three cases. A given genecode_trimmed_fq must exist.
 GENECODE_TRIMMED_GIVEN = bool(config['params'].get('genecode_trimmed_fq'))
-GENECODE_FQ = config['params'].get('genecode_trimmed_fq') or "data/split_read.2.fq.gz"
-if GENECODE_TRIMMED_GIVEN and not os.path.exists(GENECODE_FQ):
+if GENECODE_TRIMMED_GIVEN and not os.path.exists(config['params']['genecode_trimmed_fq']):
     raise ValueError("params.genecode_trimmed_fq must point to an existing split + trimmed fastq(.gz): "
-                     "'{}'".format(GENECODE_FQ))
-GENECODE_SUB_RAW = "genecode/{}.sub.{}fq.gz".format(GENECODE_ID, "" if GENECODE_TRIMMED_GIVEN else "raw.")
-GENECODE_SUB = "genecode/{}.sub.fq.gz".format(GENECODE_ID)
+                     "'{}'".format(config['params']['genecode_trimmed_fq']))
+GENECODE_PIPELINE_TRIMMED = "data/split_read_2_trimmed.fastq.gz"
+GENECODE_USE_TRIMMED = GENECODE_TRIMMED_GIVEN or os.path.exists(GENECODE_PIPELINE_TRIMMED)
+if GENECODE_USE_TRIMMED:
+    GENECODE_FQ = config['params'].get('genecode_trimmed_fq') or GENECODE_PIPELINE_TRIMMED
+else:
+    if config['params']['sequence_type'].lower() != 'se':
+        raise ValueError("modules.genecode trims the sample itself for SE600 only (params.sequence_type: se)")
+    GENECODE_FQ = "data/split_read.2.fq.gz"
+print("genecode input: {} ({})".format(GENECODE_FQ, "already trimmed, no trim" if GENECODE_USE_TRIMMED
+                                      else "untrimmed: sample, then trim_sub_genecode"), file=sys.stderr)
+GENECODE_SUB = "genecode/{}.sub.fq.gz".format(GENECODE_ID)                  # sampled reads
+GENECODE_SUB_TRIMMED = GENECODE_SUB if GENECODE_USE_TRIMMED else "genecode/{}.sub.trimmed.fq.gz".format(GENECODE_ID)  # what is mapped
 
 GENECODE_SUB_MODE = config['params'].get('genecode_subsample_mode', 'head')
 if GENECODE_SUB_MODE not in ('umi', 'head', 'random'):
@@ -86,7 +97,7 @@ rule subsample_reads_genecode:
         fq = GENECODE_FQ,
         umis = "genecode/sampled_umis.txt" if GENECODE_SUB_MODE == 'umi' else []
     output:
-        fq = GENECODE_SUB_RAW
+        fq = GENECODE_SUB
     params:
         n = config['params'].get('genecode_subsample_reads', 400000),
         seed = config['params'].get('genecode_subsample_seed', 100),
@@ -115,15 +126,15 @@ rule subsample_reads_genecode:
         """
 
 
-if not GENECODE_TRIMMED_GIVEN:
+if not GENECODE_USE_TRIMMED:
     # Same bbduk recipe and the same config switches as splitreads.smk trim_reads (SE only), applied to the sample:
     # up to four bbduk stages chained through pipes (5' contaminant -> 3' linker -> 3' adapter + qtrim -> polyA); only the
     # last writes to disk. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
     rule trim_sub_genecode:
         input:
-            GENECODE_SUB_RAW
-        output:
             GENECODE_SUB
+        output:
+            GENECODE_SUB_TRIMMED
         params:
             bbduk = config['params']['bbduk'],
             adapter_ref = config['params'].get('adapter_ref', ''),
@@ -177,7 +188,7 @@ if not GENECODE_TRIMMED_GIVEN:
 rule map_reads_minimap_genecode:
     input:
         ref = GENECODE_REF,
-        fq = GENECODE_SUB
+        fq = GENECODE_SUB_TRIMMED
     output:
         bam = "genecode/{}.genecode.bam".format(GENECODE_ID)
     threads:

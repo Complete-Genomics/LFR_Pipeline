@@ -167,9 +167,9 @@ params:
     # rRNA is largely absent from GENCODE: without the rRNA fasta (e.g. NCBI NR_046235 45S + NR_023363 5S)
     # rRNA reads cannot be counted; without the genome (GRCh38.primary_assembly, decoy) genomic/intronic
     # reads get forced onto transcripts.
-    # Input: data/split_read.2.fq.gz (untrimmed). genecode samples it first, then trims only the sample with the same
-    # trim_reads settings as the rest of the pipeline (adapter_ref*, trim_q, trim_polya ...). Blank = this default.
-    # Set a path only for an already split + TRIMMED fastq (sampled as is, no trim).
+    # Input (first match wins): genecode_trimmed_fq if set; else data/split_read_2_trimmed.fastq.gz if it already exists
+    # -> sampled as is, no trim; else data/split_read.2.fq.gz -> sampled first, then only the sample is trimmed
+    # (trim_sub_genecode, same adapter_ref*/trim_q/trim_polya ... settings as trim_reads). Never trims the whole library.
     genecode_trimmed_fq: ""
     genecode_ref: ""
     genecode_transcripts: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"
