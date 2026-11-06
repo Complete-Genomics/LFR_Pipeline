@@ -192,6 +192,7 @@ params:
     #   build_genecode_ref.sh -t <genecode_transcripts> -r <genecode_rrna_fa> -o gencode.v50.transcripts_rRNA.fa.gz
     # Blank = that file next to genecode_transcripts.
     genecode_consensus_ref: ""
+    genecode_consensus_n: 0           # 0 = classify all consensus; N (e.g. 10000) = only N, every k-th so all chromosomes are covered
     genecode_consensus_min_cov: 0.8   # best hit must cover >= this fraction of the consensus, else low_cov (globin/rRNA exempt)
     # samtools sort memory limit per sorting/compression thread.
     minimap_sort_mem: "8G"

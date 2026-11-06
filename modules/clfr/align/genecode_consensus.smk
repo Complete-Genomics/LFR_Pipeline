@@ -2,11 +2,14 @@
 # Independent module: enabled by modules.genecode_consensus (workflows/clfr.smk adds the composition TSV/PNG to run_all).
 # The read-level counterpart is genecode.smk (subsampled SE600 reads vs transcripts + rRNA + genome decoy).
 #
-# Input is consensus_fasta.smk's consensus/consensus.fixRC.fasta (built on demand if missing).
+# Input is consensus_fasta.smk's consensus/consensus.fixRC.fasta (built on demand if missing). By default the whole
+# file is classified; set params.genecode_consensus_n = N (e.g. 10000) to classify only N consensus. The file is ordered
+# by chromosome, so the sample is every k-th record (evenly spread, deterministic), not the first N.
 # Reference = GENCODE transcripts + rRNA, no genome decoy: consensus come from genome-mapped reads, so the question is
 # only which annotated transcript each one matches. Built once, outside this workflow, by
 #   build_genecode_ref.sh -t <genecode_transcripts> -r <genecode_rrna_fa> -o <...>.transcripts_rRNA.fa.gz
 # and shared by all samples (params.genecode_consensus_ref, default: next to genecode_transcripts).
+#   subsample_consensus_genecode -> genecode/{id}.consensus.sub.fasta (every k-th consensus; skipped when n=0 or n >= total)
 #   map_consensus_genecode      -> genecode/{id}.consensus.paf   (minimap2 -x asm20, all hits)
 #   classify_consensus_genecode -> genecode/{id}.consensus.{composition,per_read,genes}.tsv + .png
 # Classification (genecode_consensus_anno.py): best hit per consensus = most matching bases; globin by gene name and
@@ -15,6 +18,9 @@
 import os
 
 GENECODE_CONS_ID = config['samples']['id']
+GENECODE_CONS_N = int(config['params'].get('genecode_consensus_n', 0))
+GENECODE_CONS_FA = "genecode/{}.consensus.sub.fasta".format(GENECODE_CONS_ID) if GENECODE_CONS_N > 0 \
+    else "consensus/consensus.fixRC.fasta"
 _gcc_tx = config['params'].get('genecode_transcripts', '')
 if not _gcc_tx and not config['params'].get('genecode_consensus_ref'):
     raise ValueError("modules.genecode_consensus needs params.genecode_transcripts in this run's config.yaml, "
@@ -29,10 +35,27 @@ if not os.path.exists(GENECODE_CONS_REF):
                          GENECODE_CONS_REF, GENECODE_CONS_REF))
 
 
+rule subsample_consensus_genecode:
+    input:
+        fasta = "consensus/consensus.fixRC.fasta"
+    output:
+        fasta = "genecode/{}.consensus.sub.fasta".format(GENECODE_CONS_ID)
+    params:
+        n = GENECODE_CONS_N
+    shell:
+        """
+        mkdir -p genecode
+        # two passes: count records, then keep every k-th (k = total / n) so all chromosomes are represented
+        total=$(grep -c '^>' {input.fasta})
+        awk -v n={params.n} -v total="$total" 'BEGIN {{ step = (total > n) ? total / n : 1 }}
+            /^>/ {{ i++; keep = (i - 1 >= kept * step && kept < n); if (keep) kept++ }} keep' {input.fasta} > {output.fasta}
+        """
+
+
 rule map_consensus_genecode:
     input:
         ref = GENECODE_CONS_REF,
-        fasta = "consensus/consensus.fixRC.fasta"
+        fasta = GENECODE_CONS_FA
     output:
         paf = "genecode/{}.consensus.paf".format(GENECODE_CONS_ID)
     threads:
@@ -54,7 +77,7 @@ rule map_consensus_genecode:
 rule classify_consensus_genecode:
     input:
         paf = "genecode/{}.consensus.paf".format(GENECODE_CONS_ID),
-        fasta = "consensus/consensus.fixRC.fasta"
+        fasta = GENECODE_CONS_FA
     output:
         tsv = "genecode/{}.consensus.composition.tsv".format(GENECODE_CONS_ID),
         per_read = "genecode/{}.consensus.per_read.tsv".format(GENECODE_CONS_ID),
