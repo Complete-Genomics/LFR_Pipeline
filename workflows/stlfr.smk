@@ -130,7 +130,8 @@ rule run_all:
         
 
 # Include other modules and rules to run
-src_dir = config['params']['src_dir']
+import os
+src_dir = os.path.expanduser(config['params']['src_dir'])
 include: src_dir+"modules/stlfr/calc_frag_len/calc_frag_len.smk"
 include: src_dir+"modules/shared/variant_calling/make_vcf.smk"
 include: src_dir+"modules/shared/metrics/metrics.smk"
