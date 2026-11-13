@@ -11,6 +11,10 @@
 #   3. otherwise data/split_read.2.fq.gz (SE600)       -> sample first, then trim only the sample (trim_sub_genecode, same
 #                                                         params.adapter_ref*/trim_* settings as trim_reads), so the whole
 #                                                         library is never trimmed
+#   4. no split_read.2.fq.gz yet, only the RAW data/read_2.fq.gz (modules.BCsplit true, head/random mode) -> sample the raw
+#                                                         reads, split_sub_genecode splits only that sample (same split_barcode_LFR
+#                                                         params as split_reads), then trim as in 3. Without the split the read
+#                                                         names carry no '#<barcode>' and the UMI panel is empty (n=0).
 #   select_umis_genecode      -> genecode/sampled_umis.txt     (umi mode only)
 #   subsample_reads_genecode  -> genecode/{id}.sub.fq.gz          (the sampled reads; already trimmed in case 1/2)
 #   trim_sub_genecode         -> genecode/{id}.sub.trimmed.fq.gz  (case 3 only; reads dropped by minlen/maxns/maq make it a
@@ -57,9 +61,20 @@ else:
     if config['params']['sequence_type'].lower() != 'se':
         raise ValueError("modules.genecode trims the sample itself for SE600 only (params.sequence_type: se)")
     GENECODE_FQ = "data/split_read.2.fq.gz"
+# Case 4: raw reads only -> sample, then split the sample. umi mode needs the full-library split (split_stat_read1.log), so it
+# keeps using the split_reads rule through data/split_read.2.fq.gz.
+GENECODE_SPLIT_SAMPLE = (not GENECODE_USE_TRIMMED and not os.path.exists("data/split_read.2.fq.gz")
+                         and config['modules'].get('BCsplit', True) is True
+                         and config['params'].get('genecode_subsample_mode', 'head') != 'umi')
+if GENECODE_SPLIT_SAMPLE:
+    if config['params']['bc_condition'] not in ('random_bc', 'random_bc_umi_rc'):
+        raise ValueError("modules.genecode splits the raw sample itself for cLFR random_bc / random_bc_umi_rc only")
+    GENECODE_FQ = "data/read_2.fq.gz"
 print("genecode input: {} ({})".format(GENECODE_FQ, "already trimmed, no trim" if GENECODE_USE_TRIMMED
                                       else "untrimmed: sample, then trim_sub_genecode"), file=sys.stderr)
-GENECODE_SUB = "genecode/{}.sub.fq.gz".format(GENECODE_ID)                  # sampled reads
+GENECODE_SUB_SPLIT = "genecode/{}.sub.split".format(GENECODE_ID)             # case 4: split prefix (.1/.2.fq.gz)
+GENECODE_SUB = ("genecode/{}.sub.raw.fq.gz" if GENECODE_SPLIT_SAMPLE else "genecode/{}.sub.fq.gz").format(GENECODE_ID)  # sampled reads
+GENECODE_TRIM_IN = GENECODE_SUB_SPLIT + ".2.fq.gz" if GENECODE_SPLIT_SAMPLE else GENECODE_SUB  # what trim_sub_genecode reads
 GENECODE_SUB_TRIMMED = GENECODE_SUB if GENECODE_USE_TRIMMED else "genecode/{}.sub.trimmed.fq.gz".format(GENECODE_ID)  # what is mapped
 
 GENECODE_SUB_MODE = config['params'].get('genecode_subsample_mode', 'head')
@@ -126,13 +141,61 @@ rule subsample_reads_genecode:
         """
 
 
+if GENECODE_SPLIT_SAMPLE:
+    rule split_sub_genecode:
+        # Same split_barcode_LFR.py call as splitreads.smk split_reads (random_bc*), on the sampled raw reads. SE: R1 is empty.
+        input:
+            GENECODE_SUB
+        output:
+            r1 = GENECODE_SUB_SPLIT + ".1.fq.gz",
+            r2 = GENECODE_SUB_SPLIT + ".2.fq.gz"
+        params:
+            prefix = GENECODE_SUB_SPLIT,
+            general_python = config['params']['general_python'],
+            src_dir = config['params']['src_dir'],
+            r2_len = config['params']['read_len'],
+            r1_len = config['params']['read_len_r1'],
+            cbc_len = config['params']['cbc_len'],
+            bc_start = config['params']['bc_start'],
+            gdna_start = config['params']['gdna_start'],
+            additional_bc_start = config['params']['additional_bc_start'],
+            additional_bc_len = config['params']['additional_bc_len'],
+            gdna_start_r1 = config['params']['gdna_start_r1'],
+            additional_bc_len_r1 = config['params']['additional_bc_len_r1'],
+            rc = "--reverse_complement" if config['params']['bc_condition'] == 'random_bc_umi_rc' else ""
+        threads:
+            GENECODE_THREADS
+        log:
+            "genecode/split_sub_genecode.log"
+        shell:
+            """
+            set -euo pipefail
+            # run in a scratch dir: the script writes split_stat_read1.log into its cwd, which must not
+            # overwrite the full-library one
+            ROOT=$PWD
+            mkdir -p genecode/split_work && cd genecode/split_work
+            : > empty_r1.fq
+            {params.general_python} {params.src_dir}/modules/shared/splitreads/split_barcode_LFR.py \
+                --r1 empty_r1.fq --r2 $ROOT/{input} --read_len {params.r2_len} --output $ROOT/{params.prefix} \
+                --cbc_len {params.cbc_len} --bc_len_redundant {params.cbc_len} \
+                --bc_start {params.bc_start} --gdna_start {params.gdna_start} \
+                --additional_bc_start {params.additional_bc_start} --additional_bc_len {params.additional_bc_len} \
+                --gdna_start_r1 {params.gdna_start_r1} --read_len_r1 {params.r1_len} \
+                --additional_bc_len_r1 {params.additional_bc_len_r1} {params.rc} --threads {threads} 2> $ROOT/{log}
+            cd $ROOT && rm -rf genecode/split_work
+            n_out=$(( $(gzip -dc {output.r2} | wc -l) / 4 ))
+            echo "split reads: $n_out" >&2
+            [ "$n_out" -gt 0 ]
+            """
+
+
 if not GENECODE_USE_TRIMMED:
     # Same bbduk recipe and the same config switches as splitreads.smk trim_reads (SE only), applied to the sample:
     # up to four bbduk stages chained through pipes (5' contaminant -> 3' linker -> 3' adapter + qtrim -> polyA); only the
     # last writes to disk. Stage order matters: polyA is only a tail once the 3' adapter behind it is removed.
     rule trim_sub_genecode:
         input:
-            GENECODE_SUB
+            GENECODE_TRIM_IN
         output:
             GENECODE_SUB_TRIMMED
         params:
