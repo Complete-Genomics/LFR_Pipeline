@@ -11,7 +11,7 @@
 #   3. otherwise data/split_read.2.fq.gz (SE600)       -> sample first, then trim only the sample (trim_sub_genecode, same
 #                                                         params.adapter_ref*/trim_* settings as trim_reads), so the whole
 #                                                         library is never trimmed
-#   4. no split_read.2.fq.gz yet, only the RAW data/read_2.fq.gz (modules.BCsplit true, head/random mode) -> sample the raw
+#   4. split_read.2.fq.gz missing or without '#<barcode>' in its read names (e.g. BCsplit false), RAW data/read_2.fq.gz, head/random mode -> sample the raw
 #                                                         reads, split_sub_genecode splits only that sample (same split_barcode_LFR
 #                                                         params as split_reads), then trim as in 3. Without the split the read
 #                                                         names carry no '#<barcode>' and the UMI panel is empty (n=0).
@@ -61,17 +61,28 @@ else:
     if config['params']['sequence_type'].lower() != 'se':
         raise ValueError("modules.genecode trims the sample itself for SE600 only (params.sequence_type: se)")
     GENECODE_FQ = "data/split_read.2.fq.gz"
-# Case 4: raw reads only -> sample, then split the sample. umi mode needs the full-library split (split_stat_read1.log), so it
-# keeps using the split_reads rule through data/split_read.2.fq.gz.
-GENECODE_SPLIT_SAMPLE = (not GENECODE_USE_TRIMMED and not os.path.exists("data/split_read.2.fq.gz")
-                         and config['modules'].get('BCsplit', True) is True
-                         and config['params'].get('genecode_subsample_mode', 'head') != 'umi')
+# Case 4: the reads are not split yet -> sample, then split the sample. "Not split" = data/split_read.2.fq.gz is missing, or its
+# first read name has no '#<barcode>' (modules.BCsplit false makes split_reads only symlink the raw read_2 to that name).
+# umi mode needs the full-library split (split_stat_read1.log), so it keeps using the split_reads rule.
+def _read_names_have_barcode(path):
+    import gzip
+    try:
+        with gzip.open(path, 'rt') as fh:
+            return '#' in fh.readline()
+    except (OSError, EOFError):
+        return False
+
+
+GENECODE_SPLIT_SAMPLE = (not GENECODE_USE_TRIMMED
+                         and config['params'].get('genecode_subsample_mode', 'head') != 'umi'
+                         and not _read_names_have_barcode("data/split_read.2.fq.gz"))
 if GENECODE_SPLIT_SAMPLE:
     if config['params']['bc_condition'] not in ('random_bc', 'random_bc_umi_rc'):
         raise ValueError("modules.genecode splits the raw sample itself for cLFR random_bc / random_bc_umi_rc only")
     GENECODE_FQ = "data/read_2.fq.gz"
 print("genecode input: {} ({})".format(GENECODE_FQ, "already trimmed, no trim" if GENECODE_USE_TRIMMED
-                                      else "untrimmed: sample, then trim_sub_genecode"), file=sys.stderr)
+                                      else "raw: sample, split_sub_genecode, trim_sub_genecode" if GENECODE_SPLIT_SAMPLE
+                                      else "split, untrimmed: sample, then trim_sub_genecode"), file=sys.stderr)
 GENECODE_SUB_SPLIT = "genecode/{}.sub.split".format(GENECODE_ID)             # case 4: split prefix (.1/.2.fq.gz)
 GENECODE_SUB = ("genecode/{}.sub.raw.fq.gz" if GENECODE_SPLIT_SAMPLE else "genecode/{}.sub.fq.gz").format(GENECODE_ID)  # sampled reads
 GENECODE_TRIM_IN = GENECODE_SUB_SPLIT + ".2.fq.gz" if GENECODE_SPLIT_SAMPLE else GENECODE_SUB  # what trim_sub_genecode reads
