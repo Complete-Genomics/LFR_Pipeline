@@ -174,6 +174,8 @@ def main():
     ap.add_argument('--out_ambiguous', required=True, help='ambiguous class-combination TSV')
     ap.add_argument('--out_clip', default='',
                     help='optional TSV: soft-clip length distribution of each mapped read\'s best hit, per class and read end')
+    ap.add_argument('--out_reads', default='',
+                    help='optional TSV: read name and class of every read (genecode_genome.py crosses it with the genome class)')
     ap.add_argument('--gtf', default='', help='GENCODE annotation GTF(.gz) for gene_type; optional')
     ap.add_argument('--min_cov', type=float, default=0.5,
                     help='best hit must cover >= this fraction of the read (default 0.5)')
@@ -195,6 +197,8 @@ def main():
             return
         cls, combo = classify_read(recs, gtf, cache, a.min_cov, a.tie_frac)
         reads[cls] += 1
+        if reads_out:
+            reads_out.write('{}\t{}\n'.format(recs[0].query_name, cls))
         if a.out_clip:
             c = clip_of_best(recs)
             if c is not None:
@@ -209,6 +213,9 @@ def main():
             umis[cls].add(u)
             all_umis.add(u)
 
+    reads_out = open(a.out_reads, 'w') if a.out_reads else None
+    if reads_out:
+        reads_out.write('read\tclass\n')
     cur, name = [], None
     with pysam.AlignmentFile(a.bam, 'rb', check_sq=False) as bam:
         for rec in bam:
@@ -217,6 +224,8 @@ def main():
                 cur, name = [], rec.query_name
             cur.append(rec)
         flush(cur)
+    if reads_out:
+        reads_out.close()
 
     total = sum(reads.values())
     if total == 0:

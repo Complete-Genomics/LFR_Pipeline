@@ -12,6 +12,12 @@
 #   subsample_consensus_genecode -> genecode/{id}.consensus.sub.fasta (every k-th consensus; skipped when n=0 or n >= total)
 #   map_consensus_genecode      -> genecode/{id}.consensus.paf   (minimap2 -x asm20, all hits)
 #   classify_consensus_genecode -> genecode/{id}.consensus.{composition,per_read,genes}.tsv + .png
+# Always on with this module: the transcript reference has no intron / intergenic sequence, so 'unmapped' above
+# cannot say what those consensus are. This maps them (only them) to the genome (params.genecode_genome, minimap2 -x splice) and
+# classifies by params.genecode_gtf: exon same strand / exon antisense / intronic / intergenic (genecode_consensus_genome.py).
+#   extract_unmapped_genecode   -> genecode/{id}.consensus.unmapped.fasta  (+ genecode_consensus_genome_n: random subset, 0 = all)
+#   map_unmapped_genome_genecode-> genecode/{id}.consensus.unmapped_genome.paf
+#   classify_unmapped_genome_genecode -> genecode/{id}.consensus.unmapped_genome.{tsv,summary.tsv}
 # Classification (genecode_consensus_anno.py): best hit per consensus = most matching bases; globin by gene name and
 # rRNA are kept whatever the coverage; otherwise best-hit query coverage < genecode_consensus_min_cov -> low_cov;
 # consensus absent from the PAF -> unmapped (intron / intergenic / unannotated isoform / chimera all land here).
@@ -93,4 +99,67 @@ rule classify_consensus_genecode:
     shell:
         """
         {params.python} {params.script} {input.paf} {params.prefix} --fasta {input.fasta} --min_cov {params.min_cov}
+        """
+
+
+for _k in ('genecode_genome', 'genecode_gtf'):
+    if not config['params'].get(_k):
+        raise ValueError("modules.genecode_consensus needs params.{} in this run's config.yaml".format(_k))
+
+rule extract_unmapped_genecode:
+    input:
+        fasta = GENECODE_CONS_FA,
+        per_read = "genecode/{}.consensus.per_read.tsv".format(GENECODE_CONS_ID)
+    output:
+        fasta = "genecode/{}.consensus.unmapped.fasta".format(GENECODE_CONS_ID)
+    params:
+        python = config['params']['general_python'],
+        script = config['params']['src_dir'] + "modules/clfr/align/genecode_consensus_genome.py",
+        n = int(config['params'].get('genecode_consensus_genome_n', 0)),
+        seed = config['params'].get('genecode_subsample_seed', 100)
+    shell:
+        "{params.python} {params.script} extract {input.fasta} {input.per_read} {output.fasta} --n {params.n} --seed {params.seed}"
+
+rule map_unmapped_genome_genecode:
+    input:
+        ref = config['params']['genecode_genome'],
+        fasta = "genecode/{}.consensus.unmapped.fasta".format(GENECODE_CONS_ID)
+    output:
+        paf = "genecode/{}.consensus.unmapped_genome.paf".format(GENECODE_CONS_ID)
+    threads:
+        config['threads'].get('consensus_minimap', 20)
+    params:
+        MINIMAP = config['params']['minimap2']
+    log:
+        "genecode/minimap_unmapped_genome_genecode.log"
+    benchmark:
+        "Benchmarks/main.map_unmapped_genome_genecode.txt"
+    shell:
+        """
+        # splice preset: consensus are mature or partly spliced RNA, so long introns must not break the alignment
+        {params.MINIMAP} -x splice -t {threads} {input.ref} {input.fasta} > {output.paf} 2>> {log}
+        """
+
+rule classify_unmapped_genome_genecode:
+    input:
+        paf = "genecode/{}.consensus.unmapped_genome.paf".format(GENECODE_CONS_ID),
+        fasta = "genecode/{}.consensus.unmapped.fasta".format(GENECODE_CONS_ID),
+        comp = "genecode/{}.consensus.composition.tsv".format(GENECODE_CONS_ID)
+    output:
+        tsv = "genecode/{}.consensus.unmapped_genome.tsv".format(GENECODE_CONS_ID),
+        summary = "genecode/{}.consensus.unmapped_genome.summary.tsv".format(GENECODE_CONS_ID)
+    params:
+        python = config['params']['general_python'],
+        script = config['params']['src_dir'] + "modules/clfr/align/genecode_consensus_genome.py",
+        gtf = config['params']['genecode_gtf'],
+        prefix = "genecode/{}.consensus.unmapped_genome".format(GENECODE_CONS_ID),
+        fa = GENECODE_CONS_FA,
+        min_cov = config['params'].get('genecode_consensus_genome_min_cov', 0.8)
+    shell:
+        """
+        total=$(grep -c '^>' {params.fa})
+        # all unmapped consensus (the composition row), so pct_of_all_consensus is right when only a --n subset was mapped
+        n_un=$(awk -F '\t' '$1 == "unmapped" {{print $2}}' {input.comp}); n_un=${{n_un:-0}}
+        {params.python} {params.script} classify {input.paf} {params.gtf} {params.prefix} {input.fasta} \
+            --total_consensus $total --n_unmapped $n_un --min_cov {params.min_cov}
         """

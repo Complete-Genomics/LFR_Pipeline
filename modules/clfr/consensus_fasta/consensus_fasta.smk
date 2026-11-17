@@ -101,6 +101,8 @@ rule reformat_readid:
         samtools = config['params'].get('samtools', 'samtools')
     threads:
         config['threads'].get('consensus_name_sort', 2)
+    resources:
+        mem_mb = 6000
     benchmark:
         "Benchmarks/consensus_fasta.reformat_readid.{id}.{chr}.txt"
     shell:
@@ -108,7 +110,7 @@ rule reformat_readid:
         "{params.python} {params.src_dir}/modules/clfr/consensus_fasta/consensus_fasta_supp.py "
         "--module reformat_readid --seq_type {params.seq_type} --umi_len {params.umi_len} "
         "--chr_name {wildcards.chr} --input_bam {input.bam} --output_bam - | "
-        "{params.samtools} sort -@ {threads} -n -o {output} -"
+        "{params.samtools} sort -@ {threads} -m 2G -n -o {output} -"
 
 rule salvage_umi_map:
     input:

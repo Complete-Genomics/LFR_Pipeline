@@ -26,6 +26,12 @@
 #   map_reads_minimap_genecode-> genecode/{id}.genecode.bam    (read-grouped, unsorted, unmapped kept)
 #   classify_reads_genecode   -> genecode/{id}.genecode_composition.tsv (+ _ambiguous.tsv, _clip.tsv)
 #   plot_composition_genecode -> genecode/{id}.genecode_composition.png (barplot, reads % and UMI %)
+# Always on: the same reads are also mapped to the GENOME (minimap2 -x splice) so unmapped / low_cov / genome_decoy reads can be explained
+# (the transcript reference has no intron / intergenic sequence, and the decoy is aligned linearly):
+#   map_reads_genome_genecode   -> genecode/{id}.genecode_genome.paf
+#   classify_genome_genecode    -> genecode/{id}.genecode_genome.tsv (genome class of all reads: exon same strand / antisense / intronic /
+#                                  intergenic / low_cov / no_hit) + .genecode_genome_by_class.tsv (transcript class x genome class)
+#                                  + .genecode_genome_reads.tsv (per read, with exon_frac = share of the alignment in exons, 0 = all intron)
 # Reads and UMIs are both reported: rRNA is often deep per molecule, so the two can differ a lot.
 import os
 import sys
@@ -46,6 +52,12 @@ if not os.path.exists(GENECODE_REF):
     raise ValueError("GENCODE combined reference not found: {}\nBuild it once with "
                      "modules/clfr/align/build_genecode_ref.sh (transcripts + rRNA + genome decoy), or point "
                      "params.genecode_ref at an existing file".format(GENECODE_REF))
+
+
+# The genome step needs the genome and the gtf (params.genecode_genome, params.genecode_gtf; both are in config/config.yaml).
+for _k in ('genecode_genome', 'genecode_gtf'):
+    if not config['params'].get(_k):
+        raise ValueError("modules.genecode needs params.{} (genome mapping of the sampled reads) in this run's config.yaml".format(_k))
 
 
 # See the header for the three cases. A given genecode_trimmed_fq must exist.
@@ -294,7 +306,8 @@ rule classify_reads_genecode:
     output:
         tsv = "genecode/{}.genecode_composition.tsv".format(GENECODE_ID),
         amb = "genecode/{}.genecode_ambiguous.tsv".format(GENECODE_ID),
-        clip = "genecode/{}.genecode_clip.tsv".format(GENECODE_ID)
+        clip = "genecode/{}.genecode_clip.tsv".format(GENECODE_ID),
+        reads = "genecode/{}.genecode_reads.tsv".format(GENECODE_ID)
     params:
         script = config['params']['src_dir'] + "modules/clfr/align/genecode_classify.py",
         gtf = config['params'].get('genecode_gtf', ''),
@@ -305,7 +318,7 @@ rule classify_reads_genecode:
         gtf_arg=""
         if [ -n "{params.gtf}" ]; then gtf_arg="--gtf {params.gtf}"; fi
         python3 {params.script} --bam {input.bam} --out {output.tsv} --out_ambiguous {output.amb} \
-            --out_clip {output.clip} --min_cov {params.min_cov} $gtf_arg
+            --out_clip {output.clip} --out_reads {output.reads} --min_cov {params.min_cov} $gtf_arg
         cat {output.tsv} >&2
         """
 
@@ -320,3 +333,41 @@ rule plot_composition_genecode:
         title = "GENCODE composition: {}".format(config['samples'].get('name', GENECODE_ID))
     shell:
         "python3 {params.script} --tsv {input.tsv} --out {output.png} --title '{params.title}'"
+
+
+rule map_reads_genome_genecode:
+    input:
+        ref = config['params']['genecode_genome'],
+        fq = GENECODE_SUB_TRIMMED
+    output:
+        paf = "genecode/{}.genecode_genome.paf".format(GENECODE_ID)
+    threads:
+        GENECODE_THREADS
+    params:
+        MINIMAP = config['params']['minimap2']
+    log:
+        "genecode/minimap_genome_genecode.log"
+    benchmark:
+        "Benchmarks/main.map_reads_genome_genecode.txt"
+    shell:
+        """
+        # spliced alignment to the genome; the PAF keeps secondary hits, the classifier takes the longest per read
+        {params.MINIMAP} -x splice -t {threads} {input.ref} {input.fq} > {output.paf} 2>> {log}
+        """
+
+
+rule classify_genome_genecode:
+    input:
+        paf = "genecode/{}.genecode_genome.paf".format(GENECODE_ID),
+        reads = "genecode/{}.genecode_reads.tsv".format(GENECODE_ID)
+    output:
+        tsv = "genecode/{}.genecode_genome.tsv".format(GENECODE_ID),
+        by_class = "genecode/{}.genecode_genome_by_class.tsv".format(GENECODE_ID),
+        per_read = "genecode/{}.genecode_genome_reads.tsv".format(GENECODE_ID)
+    params:
+        script = config['params']['src_dir'] + "modules/clfr/align/genecode_genome.py",
+        gtf = config['params']['genecode_gtf'],
+        prefix = "genecode/{}.genecode_genome".format(GENECODE_ID),
+        min_cov = config['params'].get('genecode_min_cov', 0.5)
+    shell:
+        "python3 {params.script} {input.paf} {params.gtf} {input.reads} {params.prefix} --min_cov {params.min_cov}"

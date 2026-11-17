@@ -59,10 +59,13 @@ def run_all_input(wildcards):
     # GENCODE composition: additive target; set modules.mapping etc. to False for a composition-only run
     if GENECODE:
         run_all_files.extend(["genecode/{}.genecode_composition.tsv".format(config['samples']['id']),
-                              "genecode/{}.genecode_composition.png".format(config['samples']['id'])])
+                              "genecode/{}.genecode_composition.png".format(config['samples']['id']),
+                              "genecode/{}.genecode_genome_by_class.tsv".format(config['samples']['id'])])
     if GENECODE_CONSENSUS:
         run_all_files.extend(["genecode/{}.consensus.composition.tsv".format(config['samples']['id']),
                               "genecode/{}.consensus.png".format(config['samples']['id'])])
+    if GENECODE_CONSENSUS:   # also maps the consensus unmapped to the transcripts to the genome (genecode_consensus.smk)
+        run_all_files.append("genecode/{}.consensus.unmapped_genome.summary.tsv".format(config['samples']['id']))
 
     if config['modules']['mapping']==True:
         run_all_files.extend(["keep/Align/{}.sort.bam".format(config['samples']['id']),])

@@ -175,7 +175,7 @@ params:
     genecode_transcripts: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.transcripts.fa.gz"
     genecode_gtf: "/home/ycai/src/LFR_Pipeline/ref/genecode/gencode.v50.annotation.gtf.gz"   # gene_type per transcript
     genecode_rrna_fa: "/home/ycai/src/LFR_Pipeline/ref/genecode/human_rRNA.fa"
-    genecode_genome: "/home/ycai/src/LFR_Pipeline/ref/genecode/GRCh38.primary_assembly.genome.fa.gz"
+    genecode_genome: "/home/ycai/src/LFR_Pipeline/ref/genecode/GRCh38.primary_assembly.genome.fa.gz"   # also: the sampled reads are mapped to it (spliced) to explain unmapped / low_cov / genome_decoy reads (genecode_genome*.tsv)
     # head (default): first N reads, fast (stops early) but depends on file order.
     # random: seqtk read sampling over the whole file, unbiased for read-level %, slow on huge fq.
     # umi: sample whole UMIs (all reads of each kept; set explicitly, needed for UMI-level %; one full awk pass).
@@ -194,6 +194,9 @@ params:
     genecode_consensus_ref: ""
     genecode_consensus_n: 0           # 0 = classify all consensus; N (e.g. 10000) = only N, every k-th so all chromosomes are covered
     genecode_consensus_min_cov: 0.8   # best hit must cover >= this fraction of the consensus, else low_cov (globin/rRNA exempt)
+    # unmapped consensus are always mapped to the genome and classified (exon / intronic / intergenic); uses genecode_genome + genecode_gtf
+    genecode_consensus_genome_n: 0        # 0 = all unmapped consensus; N = random subset of N (genecode_subsample_seed)
+    genecode_consensus_genome_min_cov: 0.8   # best genome hit must cover >= this fraction of the consensus, else genome_low_cov
     # samtools sort memory limit per sorting/compression thread.
     minimap_sort_mem: "8G"
 
