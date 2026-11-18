@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Bar plot of the genecode_classify.py composition TSV: % of reads and % of UMIs per class.
+"""Bar plots of the genecode outputs.
 
-Classified RNA classes share one hue; the non-classifiable bins (ambiguous, low_cov, unmapped)
-are neutral gray so they read as "not assigned" rather than as another RNA class.
+composition (default): genecode_classify.py composition TSV, % of reads and % of UMIs per class. Classified RNA
+classes share one hue; the non-classifiable bins (ambiguous, low_cov, unmapped) are neutral gray so they read as
+"not assigned" rather than as another RNA class.
+
+--kind genome: genecode_genome.py <prefix>_by_class.tsv, one 100% bar per transcript class (unmapped, low_cov,
+genome_decoy, ...) split by where its reads land in the genome (exon / intronic / intergenic / no hit).
 """
 import argparse
 import csv
@@ -50,10 +54,47 @@ def plot_composition(tsv, out, title=''):
     fig.savefig(out, dpi=200)
 
 
+# stack order = left to right; exon classes blue, intronic orange, intergenic purple, not placed gray
+GENOME_COLORS = [('exon_same_strand', '#2a6fdb'), ('exon_antisense', '#8fb4ee'), ('intronic', '#e8833a'),
+                 ('intergenic', '#8e5bb5'), ('genome_low_cov', '#b8bdc2'), ('genome_no_hit', '#6b7075')]
+
+
+def plot_genome_by_class(tsv, out, title=''):
+    data = {}   # transcript_class -> {genome_class: n_reads}
+    with open(tsv) as fh:
+        for r in csv.DictReader(fh, delimiter='\t'):
+            data.setdefault(r['transcript_class'], {})[r['genome_class']] = int(r['n_reads'])
+    classes = sorted(data, key=lambda c: -sum(data[c].values()))
+    fig, ax = plt.subplots(figsize=(10, 0.5 * len(classes) + 2))
+    for yi, c in enumerate(classes):
+        tot, left = sum(data[c].values()), 0.0
+        for g, col in GENOME_COLORS:
+            pct = 100.0 * data[c].get(g, 0) / tot
+            ax.barh(yi, pct, left=left, color=col, height=0.66, label=g if yi == 0 else None)
+            if pct >= 6:
+                ax.text(left + pct / 2, yi, '{:.0f}%'.format(pct), ha='center', va='center', fontsize=8,
+                        color='white' if g != 'exon_antisense' else '#222')
+            left += pct
+        ax.text(101, yi, 'n={:,}'.format(tot), va='center', fontsize=8, color='#444')
+    ax.set_yticks(range(len(classes)))
+    ax.set_yticklabels(classes)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel('% of reads in the transcript class')
+    for s in ('top', 'right', 'left'):
+        ax.spines[s].set_visible(False)
+    ax.tick_params(length=0)
+    ax.legend(ncol=6, loc='lower left', bbox_to_anchor=(0, 1.0), frameon=False, fontsize=8, handlelength=1.2)
+    fig.suptitle(title or 'Genome placement by transcript class', x=0.01, ha='left', fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out, dpi=200, bbox_inches='tight')
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--tsv', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--title', default='')
+    ap.add_argument('--kind', choices=['composition', 'genome'], default='composition')
     a = ap.parse_args()
-    plot_composition(a.tsv, a.out, a.title)
+    (plot_genome_by_class if a.kind == 'genome' else plot_composition)(a.tsv, a.out, a.title)

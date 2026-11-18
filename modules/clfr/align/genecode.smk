@@ -371,3 +371,15 @@ rule classify_genome_genecode:
         min_cov = config['params'].get('genecode_min_cov', 0.5)
     shell:
         "python3 {params.script} {input.paf} {params.gtf} {input.reads} {params.prefix} --min_cov {params.min_cov}"
+
+
+rule plot_genome_genecode:
+    input:
+        tsv = "genecode/{}.genecode_genome_by_class.tsv".format(GENECODE_ID)
+    output:
+        png = "genecode/{}.genecode_genome.png".format(GENECODE_ID)
+    params:
+        script = config['params']['src_dir'] + "modules/clfr/align/genecode_plot.py",
+        title = "Genome placement by transcript class: {}".format(config['samples'].get('name', GENECODE_ID))
+    shell:
+        "python3 {params.script} --kind genome --tsv {input.tsv} --out {output.png} --title '{params.title}'"
