@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 
 NUM_SPLITS_CONSENSUS=5
+# at most this many reformat_readid (python | samtools sort -n) run at once; --resources reformat_slots=N on the command line overrides it
+workflow.global_resources.setdefault("reformat_slots", 8)
 wildcard_constraints:
     split_idx = r"\d+",
     i = r"\d+"
@@ -102,7 +104,8 @@ rule reformat_readid:
     threads:
         config['threads'].get('consensus_name_sort', 2)
     resources:
-        mem_mb = 6000
+        mem_mb = 6000,
+        reformat_slots = 1
     benchmark:
         "Benchmarks/consensus_fasta.reformat_readid.{id}.{chr}.txt"
     shell:
