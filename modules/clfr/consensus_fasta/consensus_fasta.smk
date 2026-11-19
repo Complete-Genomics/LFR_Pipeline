@@ -7,7 +7,10 @@ from pathlib import Path
 
 NUM_SPLITS_CONSENSUS=5
 # at most this many reformat_readid (python | samtools sort -n) run at once; --resources reformat_slots=N on the command line overrides it
-workflow.global_resources.setdefault("reformat_slots", 8)
+# workflow.global_resources is None on some Snakemake versions when --resources is not given; then the default can't be set
+# here and the cap only applies if --resources reformat_slots=N is passed
+if workflow.global_resources is not None:
+    workflow.global_resources.setdefault("reformat_slots", 8)
 wildcard_constraints:
     split_idx = r"\d+",
     i = r"\d+"
