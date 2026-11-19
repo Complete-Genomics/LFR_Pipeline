@@ -7,6 +7,7 @@ classes share one hue; the non-classifiable bins (ambiguous, low_cov, unmapped) 
 
 --kind genome: genecode_genome.py <prefix>_by_class.tsv, one 100% bar per transcript class (unmapped, low_cov,
 genome_decoy, ...) split by where its reads land in the genome (exon / intronic / intergenic / no hit).
+--metric bases weights by read length instead of counting reads (needs genecode_genome.py --fq).
 """
 import argparse
 import csv
@@ -59,11 +60,12 @@ GENOME_COLORS = [('exon_same_strand', '#2a6fdb'), ('exon_antisense', '#8fb4ee'),
                  ('intergenic', '#8e5bb5'), ('genome_low_cov', '#b8bdc2'), ('genome_no_hit', '#6b7075')]
 
 
-def plot_genome_by_class(tsv, out, title=''):
-    data = {}   # transcript_class -> {genome_class: n_reads}
+def plot_genome_by_class(tsv, out, title='', metric='reads'):
+    col = 'n_bases' if metric == 'bases' else 'n_reads'
+    data = {}   # transcript_class -> {genome_class: n_reads or n_bases}
     with open(tsv) as fh:
         for r in csv.DictReader(fh, delimiter='\t'):
-            data.setdefault(r['transcript_class'], {})[r['genome_class']] = int(r['n_reads'])
+            data.setdefault(r['transcript_class'], {})[r['genome_class']] = int(r[col])
     classes = sorted(data, key=lambda c: -sum(data[c].values()))
     fig, ax = plt.subplots(figsize=(10, 0.5 * len(classes) + 2))
     for yi, c in enumerate(classes):
@@ -75,12 +77,12 @@ def plot_genome_by_class(tsv, out, title=''):
                 ax.text(left + pct / 2, yi, '{:.0f}%'.format(pct), ha='center', va='center', fontsize=8,
                         color='white' if g != 'exon_antisense' else '#222')
             left += pct
-        ax.text(101, yi, 'n={:,}'.format(tot), va='center', fontsize=8, color='#444')
+        ax.text(101, yi, (('{:.1f} Mb'.format(tot / 1e6) if tot >= 1e6 else '{:.0f} kb'.format(tot / 1e3)) if metric == 'bases' else 'n={:,}'.format(tot)), va='center', fontsize=8, color='#444')
     ax.set_yticks(range(len(classes)))
     ax.set_yticklabels(classes)
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel('% of reads in the transcript class')
+    ax.set_xlabel('% of {} in the transcript class'.format(metric))
     for s in ('top', 'right', 'left'):
         ax.spines[s].set_visible(False)
     ax.tick_params(length=0)
@@ -96,5 +98,7 @@ if __name__ == '__main__':
     ap.add_argument('--out', required=True)
     ap.add_argument('--title', default='')
     ap.add_argument('--kind', choices=['composition', 'genome'], default='composition')
+    ap.add_argument('--metric', choices=['reads', 'bases'], default='reads', help='genome kind only')
     a = ap.parse_args()
-    (plot_genome_by_class if a.kind == 'genome' else plot_composition)(a.tsv, a.out, a.title)
+    if a.kind == 'genome': plot_genome_by_class(a.tsv, a.out, a.title, a.metric)
+    else: plot_composition(a.tsv, a.out, a.title)

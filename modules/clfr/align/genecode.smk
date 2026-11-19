@@ -359,7 +359,8 @@ rule map_reads_genome_genecode:
 rule classify_genome_genecode:
     input:
         paf = "genecode/{}.genecode_genome.paf".format(GENECODE_ID),
-        reads = "genecode/{}.genecode_reads.tsv".format(GENECODE_ID)
+        reads = "genecode/{}.genecode_reads.tsv".format(GENECODE_ID),
+        fq = GENECODE_SUB_TRIMMED
     output:
         tsv = "genecode/{}.genecode_genome.tsv".format(GENECODE_ID),
         by_class = "genecode/{}.genecode_genome_by_class.tsv".format(GENECODE_ID),
@@ -370,7 +371,7 @@ rule classify_genome_genecode:
         prefix = "genecode/{}.genecode_genome".format(GENECODE_ID),
         min_cov = config['params'].get('genecode_min_cov', 0.5)
     shell:
-        "python3 {params.script} {input.paf} {params.gtf} {input.reads} {params.prefix} --min_cov {params.min_cov}"
+        "python3 {params.script} {input.paf} {params.gtf} {input.reads} {params.prefix} --min_cov {params.min_cov} --fq {input.fq}"
 
 
 rule plot_genome_genecode:
@@ -383,3 +384,15 @@ rule plot_genome_genecode:
         title = "Genome placement by transcript class: {}".format(config['samples'].get('name', GENECODE_ID))
     shell:
         "python3 {params.script} --kind genome --tsv {input.tsv} --out {output.png} --title '{params.title}'"
+
+
+rule plot_genome_bases_genecode:
+    input:
+        tsv = "genecode/{}.genecode_genome_by_class.tsv".format(GENECODE_ID)
+    output:
+        png = "genecode/{}.genecode_genome_bases.png".format(GENECODE_ID)
+    params:
+        script = config['params']['src_dir'] + "modules/clfr/align/genecode_plot.py",
+        title = "Genome placement by transcript class (bases): {}".format(config['samples'].get('name', GENECODE_ID))
+    shell:
+        "python3 {params.script} --kind genome --metric bases --tsv {input.tsv} --out {output.png} --title '{params.title}'"

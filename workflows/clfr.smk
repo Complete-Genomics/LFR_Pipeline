@@ -61,7 +61,8 @@ def run_all_input(wildcards):
         run_all_files.extend(["genecode/{}.genecode_composition.tsv".format(config['samples']['id']),
                               "genecode/{}.genecode_composition.png".format(config['samples']['id']),
                               "genecode/{}.genecode_genome_by_class.tsv".format(config['samples']['id']),
-                              "genecode/{}.genecode_genome.png".format(config['samples']['id'])])
+                              "genecode/{}.genecode_genome.png".format(config['samples']['id']),
+                              "genecode/{}.genecode_genome_bases.png".format(config['samples']['id'])])
     if GENECODE_CONSENSUS:
         run_all_files.extend(["genecode/{}.consensus.composition.tsv".format(config['samples']['id']),
                               "genecode/{}.consensus.png".format(config['samples']['id'])])
